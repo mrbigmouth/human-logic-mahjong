@@ -1,0 +1,12 @@
+[package]
+name = "mj-sim"
+description = "Duplicate self-play simulator and statistics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mj-core.workspace = true
+mj-engine.workspace = true
+mj-strategy.workspace = true

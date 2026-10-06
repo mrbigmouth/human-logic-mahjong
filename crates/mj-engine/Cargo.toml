@@ -1,0 +1,12 @@
+[package]
+name = "mj-engine"
+description = "Game state machine, actions, events and player views"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mj-core.workspace = true
+mj-rules.workspace = true
+serde.workspace = true

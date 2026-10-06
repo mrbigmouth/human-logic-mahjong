@@ -1,0 +1,11 @@
+[package]
+name = "mj-rules"
+description = "RuleSet trait and the Japanese riichi implementation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mj-core.workspace = true
+serde.workspace = true

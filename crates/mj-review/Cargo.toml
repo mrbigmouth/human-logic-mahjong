@@ -1,0 +1,12 @@
+[package]
+name = "mj-review"
+description = "Game log import, move-by-move review and explanation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mj-core.workspace = true
+mj-engine.workspace = true
+mj-strategy.workspace = true

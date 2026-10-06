@@ -1,0 +1,11 @@
+[package]
+name = "mj-mjai"
+description = "mjai protocol bridge for external AIs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mj-core.workspace = true
+mj-engine.workspace = true
