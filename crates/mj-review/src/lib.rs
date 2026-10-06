@@ -1,3 +1,2 @@
-//! Review (M8): import game logs (Tenhou JSON, mjai), replay every decision through a
-//! profile, diff the player's choice against the best action term by term, and render
-//! the differences as natural-language explanations.
+//! 復盤（M8）：匯入牌譜（天鳳 JSON、mjai），用策略側寫重算每一個決策，
+//! 逐項比較玩家的選擇與最佳動作的分數拆解，再把差異寫成自然語言的解說。

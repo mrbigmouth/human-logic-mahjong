@@ -1,21 +1,21 @@
-//! Rule sets. Everything rule-specific (tile set, yaku, scoring, draws, end conditions)
-//! goes behind [`RuleSet`] so other variants (Taiwanese 16-tile, MCR, ...) can be added
-//! without touching the engine, strategy or simulator crates.
+//! 規則集。與特定規則相關的計算（役、符、點數、規則選項）放在各規則的子模組，
+//! 目前只有日本立直麻將（[`riichi`]）。之後加入台灣 16 張、國標麻將時新增對應模組，
+//! 策略、模擬、復盤只依賴 `mj-engine` 的共通介面，不必修改。
 
 pub mod riichi;
 
-/// A mahjong variant. The engine is generic over this trait.
+/// 一種麻將規則的基本資訊。
 pub trait RuleSet: Send + Sync {
-    /// Short identifier, e.g. `"riichi"`.
+    /// 簡短識別碼，例如 `"riichi"`。
     fn id(&self) -> &'static str;
 
-    /// Tiles in a concealed hand before drawing (13 for riichi, 16 for Taiwanese).
+    /// 摸牌前的手牌張數（日麻 13 張，台灣麻將 16 張）。
     fn hand_size(&self) -> usize;
 
-    /// Number of physical copies of each tile kind in the wall.
+    /// 每種牌有幾張。
     fn copies_per_kind(&self) -> u8 {
         4
     }
 
-    // M1: wall construction, legal calls, win detection, scoring, game-end conditions.
+    // 對局流程目前由 mj-engine 針對日麻實作；之後視需要再把共通部分提到這裡。
 }

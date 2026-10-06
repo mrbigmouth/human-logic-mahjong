@@ -4,3 +4,5 @@
 node_modules/
 /app/dist/
 /app/src-tauri/target/
+tools/oracle/.venv/
+__pycache__/

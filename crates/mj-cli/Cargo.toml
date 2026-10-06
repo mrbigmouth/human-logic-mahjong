@@ -13,6 +13,10 @@ mj-sim.workspace = true
 mj-tuner.workspace = true
 mj-review.workspace = true
 clap.workspace = true
+mj-engine.workspace = true
+mj-rules.workspace = true
+rayon.workspace = true
+serde_json.workspace = true
 
 [[bin]]
 name = "mj"

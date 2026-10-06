@@ -1,0 +1,231 @@
+//! 一整場對局（半莊或東風戰）：一局接一局進行，直到符合結束條件。
+//!
+//! 每局結束後：
+//! - 本場：非莊家和牌時歸零，其餘（莊家和牌、流局）加一；
+//! - 連莊時局數不變，否則進到下一局（東四之後是南一……）；
+//! - 判斷是否結束：擊飛、最終局（南四）以後有人達到返點、西入的最後一局。
+
+use crate::Player;
+use crate::event::Event;
+use crate::kyoku::{EngineError, Kyoku, KyokuSetup, Table};
+use crate::wall::{Wall, hand_seed};
+use mj_core::Pai;
+use mj_rules::riichi::RiichiConfig;
+use serde::{Deserialize, Serialize};
+
+/// 對局設定。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GameConfig {
+    /// 規則選項
+    pub rules: RiichiConfig,
+    /// 對局 seed：每一手的牌山都由它推導而來，同一個 seed 會重現同一場牌局。
+    pub seed: u64,
+    /// 前幾手改用指定的牌山，而不是由 seed 洗牌（測試、重播牌譜用）。
+    #[serde(default)]
+    pub preset_walls: Vec<Vec<Pai>>,
+    /// 打完這麼多手就結束（測試、單局練習用）。
+    #[serde(default)]
+    pub max_hands: Option<u32>,
+}
+
+impl GameConfig {
+    /// 一般對局設定（不指定牌山、不限手數）。
+    pub fn new(rules: RiichiConfig, seed: u64) -> Self {
+        Self {
+            rules,
+            seed,
+            preset_walls: Vec::new(),
+            max_hands: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GameResult {
+    /// 最終點數，依座位排列（座位 0 是起家，即東一局的莊家）。
+    pub scores: [i32; 4],
+    /// 各座位的名次，0 = 第一名。同分時離起家近的座位名次較前（上家優先）。
+    pub ranks: [u8; 4],
+    pub hands_played: u32,
+    /// 完整的事件紀錄（牌譜）；呼叫時沒有要求就是空的。
+    pub log: Vec<Event>,
+}
+
+/// 進行一整場對局。`players[0]` 是起家。`keep_log` = 是否保留完整牌譜。
+pub fn run_game(
+    cfg: &GameConfig,
+    players: &mut [Box<dyn Player>; 4],
+    keep_log: bool,
+) -> Result<GameResult, EngineError> {
+    let rules = &cfg.rules;
+    let mut log = Vec::new();
+    let mut table = Table {
+        players,
+        log: keep_log.then_some(&mut log),
+    };
+    table.emit(Event::StartGame { seed: cfg.seed });
+
+    // 正規局數：半莊 8 局（東 4 南 4），東風戰 4 局。
+    let regular_hands: u8 = if rules.hanchan { 8 } else { 4 };
+    let mut scores = [rules.starting_points; 4];
+    // index = 局序（0 = 東一、4 = 南一、8 = 西一）；honba = 本場；sticks = 供託。
+    let (mut index, mut honba, mut sticks) = (0u8, 0u8, 0u8);
+    let mut hands_played = 0u32;
+
+    loop {
+        let setup = KyokuSetup {
+            round_wind: index / 4,
+            kyoku: index % 4,
+            honba,
+            riichi_sticks: sticks,
+            scores,
+            total_kyoku: regular_hands,
+        };
+        // 第 N 手的牌山只由 (seed, N) 決定，與打法無關（duplicate 對戰需要）。
+        let wall = match cfg.preset_walls.get(hands_played as usize) {
+            Some(tiles) => Wall::from_tiles(tiles.clone()),
+            None => Wall::shuffled(hand_seed(cfg.seed, hands_played), rules.red_fives),
+        };
+        let out = Kyoku::new(&setup, rules, wall, &mut table).run()?;
+        hands_played += 1;
+        scores = out.scores;
+        sticks = out.riichi_sticks;
+        let dealer = setup.kyoku;
+        // 閒家和牌時本場歸零；莊家和牌或流局時本場加一。
+        let dealer_won = out.winners.contains(&dealer);
+        honba = if !out.winners.is_empty() && !dealer_won {
+            0
+        } else {
+            honba.saturating_add(1)
+        };
+
+        let ended = cfg.max_hands.is_some_and(|m| hands_played >= m)
+            || match_over(rules, index, &scores, dealer, out.dealer_continues);
+        if ended {
+            // 場上剩下的供託歸第一名。
+            let top = ranking(&scores).iter().position(|&r| r == 0).unwrap();
+            scores[top] += 1000 * i32::from(sticks);
+            table.emit(Event::EndGame { scores });
+            return Ok(GameResult {
+                scores,
+                ranks: ranking(&scores),
+                hands_played,
+                log,
+            });
+        }
+        // 沒有連莊就輪到下一位當莊（進到下一局）。
+        if !out.dealer_continues {
+            index += 1;
+        }
+    }
+}
+
+/// 第 `index` 局（0 = 東一局）結束、點數為 `scores` 時，對局是否結束。
+///
+/// - 擊飛：有人低於 0 點立刻結束。
+/// - 最終局（半莊為南四局）以後，有人達到返點（30000）就結束；
+///   但莊家連莊且不是第一名時繼續（莊家有權繼續追分）。莊家連莊且為第一名時，
+///   和了止め（agari-yame）讓對局結束。
+/// - 延長的風場（西入）是突然死亡制，最後一局（西四）結束時一定結束（莊家連莊除外）。
+fn match_over(
+    rules: &RiichiConfig,
+    index: u8,
+    scores: &[i32; 4],
+    dealer: u8,
+    dealer_continues: bool,
+) -> bool {
+    let regular: u8 = if rules.hanchan { 8 } else { 4 };
+    if rules.bust_ends_game && scores.iter().any(|&s| s < 0) {
+        return true;
+    }
+    let last_phase = index + 1 >= regular;
+    let reached = scores.iter().any(|&s| s >= rules.target_points);
+    let dealer_top = ranking(scores)[usize::from(dealer)] == 0;
+    if last_phase && reached && (!dealer_continues || (rules.agari_yame && dealer_top)) {
+        return true;
+    }
+    !dealer_continues && index + 1 >= regular + 4
+}
+
+/// 計算各座位名次：點數高者在前，同分時座位編號小（離起家近）者在前。
+pub fn ranking(scores: &[i32; 4]) -> [u8; 4] {
+    let mut order: Vec<usize> = (0..4).collect();
+    order.sort_by_key(|&s| (-scores[s], s));
+    let mut ranks = [0u8; 4];
+    for (r, &s) in order.iter().enumerate() {
+        ranks[s] = r as u8;
+    }
+    ranks
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const R: RiichiConfig = RiichiConfig::TENHOU;
+    /// 南四局的局序
+    const S4: u8 = 7;
+    /// 西四局的局序
+    const W4: u8 = 11;
+
+    /// 各種結束條件。
+    #[test]
+    fn end_conditions() {
+        // 還不是最終局：即使大幅領先也繼續。
+        assert!(!match_over(
+            &R,
+            3,
+            &[45_000, 20_000, 20_000, 15_000],
+            3,
+            false
+        ));
+        // 南四局，有人超過 30000 → 結束。
+        assert!(match_over(
+            &R,
+            S4,
+            &[35_000, 25_000, 20_000, 20_000],
+            3,
+            false
+        ));
+        // 南四局，沒人達到 30000 → 西入。
+        assert!(!match_over(
+            &R,
+            S4,
+            &[28_000, 26_000, 24_000, 22_000],
+            3,
+            false
+        ));
+        // 莊家連莊且為第一名、超過 30000 → 和了止め，結束。
+        assert!(match_over(
+            &R,
+            S4,
+            &[20_000, 20_000, 25_000, 35_000],
+            3,
+            true
+        ));
+        // 莊家連莊但不是第一名 → 莊家繼續。
+        assert!(!match_over(
+            &R,
+            S4,
+            &[32_000, 20_000, 23_000, 25_000],
+            3,
+            true
+        ));
+        // 西四局：莊家沒有連莊就一定結束。
+        assert!(match_over(
+            &R,
+            W4,
+            &[28_000, 26_000, 24_000, 22_000],
+            3,
+            false
+        ));
+        // 有人低於 0 點 → 立刻結束（擊飛）。
+        assert!(match_over(&R, 1, &[-100, 40_100, 30_000, 30_000], 1, false));
+    }
+
+    /// 同分時座位編號小者名次在前。
+    #[test]
+    fn ranking_breaks_ties_by_seat() {
+        assert_eq!(ranking(&[25_000, 30_000, 25_000, 20_000]), [1, 0, 2, 3]);
+    }
+}

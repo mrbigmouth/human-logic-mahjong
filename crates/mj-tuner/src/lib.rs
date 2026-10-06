@@ -1,3 +1,3 @@
-//! Automatic weight tuning (M6): CMA-ES / Bayesian optimisation over profile weights,
-//! using duplicate matches from `mj-sim` as the objective. Parameters keep their human
-//! meaning, so a tuned profile is still explainable.
+//! 自動調參（M6）：用 CMA-ES 或貝氏最佳化搜尋策略側寫的權重與曲線，
+//! 以 `mj-sim` 的 duplicate 對戰成績作為目標函數。
+//! 參數本身仍有人類可理解的意義，所以調參後的策略依然可以解釋。
