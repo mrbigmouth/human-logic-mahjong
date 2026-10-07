@@ -27,9 +27,9 @@ mj-cli / app(Tauri) ── 以上全部
 | `mj-tools` | 策略編輯者的純計算工具箱：手牌、動作後評估、看得到的牌、安全度事實（現物、筋、No Chance）、役的路線、點數、寶牌、牌桌 | M2.5 ✅ |
 | `mj-strategy` | `src/strategy-list/` 策略（main.rs、memory.rs、decision/、utils/predict/）；`framework/` 把引擎詢問拆成決策、記錄理由與預測；`build.rs` 自動產生模組；`TOOLS.md` 工具手冊 | M2.5 ✅ / M4+ 策略內容 |
 | `mj-sim` | 參考機器人（`RandomBot`、`GreedyBot`）；`replay` 牌譜重播；`predict_eval` 預測準確度；`counterfactual` 反事實決策評估；duplicate 對戰（M3） | M2.5 ✅ / M3 |
-| `mj-tuner` | 可調參數的自動調整（預測以準確度擬合、決策以反事實期望值） | M6 |
-| `mj-review` | 天鳳／mjai 牌譜匯入、Trace diff、解說模板 | M8 |
-| `mj-mjai` | mjai bridge | M6 |
+| `mj-tuner` | 可調參數的自動調整（預測以準確度擬合、決策以反事實期望值） | M8 |
+| `mj-review` | 天鳳／mjai 牌譜匯入（M4）；逐手比對使用者與策略的選擇，附理由與反事實期望值（M7） | M4 / M7 |
+| `mj-mjai` | mjai bridge，與外部強 AI 對戰與比對 | M8 |
 | `mj-cli` | 執行檔 `mj`：`strategies`、`nanikiru`、`selfplay`、`predict-eval`、`evaluate`、`simulate`、`review`、`play`、`serve` | 持續 |
 
 ## 關鍵設計

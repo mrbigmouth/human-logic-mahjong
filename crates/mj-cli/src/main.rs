@@ -93,11 +93,11 @@ enum Command {
         #[arg(long, default_value_t = 1000)]
         games: u32,
     },
-    /// 用策略復盤一份牌譜（M8）
+    /// 用策略復盤一份牌譜（M7）
     Review { log: PathBuf, strategy: String },
-    /// 在終端機與 AI 對戰（M7）
+    /// 在終端機與 AI 對戰（M9）
     Play { strategy: String },
-    /// 以 HTTP 提供 UI 用的 API，供瀏覽器開發（M7）
+    /// 以 HTTP 提供 UI 用的 API，供瀏覽器開發（M9）
     Serve {
         /// 監聽的 port（容器對外開放 30100–30300）
         #[arg(long, default_value_t = 30100)]
@@ -157,8 +157,8 @@ fn main() -> ExitCode {
             }));
         }
         Command::Simulate { .. } => "M3",
-        Command::Review { .. } => "M8",
-        Command::Play { .. } | Command::Serve { .. } => "M7",
+        Command::Review { .. } => "M7",
+        Command::Play { .. } | Command::Serve { .. } => "M9",
     };
     eprintln!("尚未實作（預計在 {milestone} 完成，見 docs/04-milestones.md）");
     ExitCode::FAILURE

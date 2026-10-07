@@ -58,11 +58,11 @@ crates/
   mj-tools     純計算工具箱（策略編輯者使用）：手牌、安全度、役、點數、牌桌
   mj-strategy  src/strategy-list/ 策略（if／else 決策程式）＋ framework 呼叫框架  ← 核心
   mj-sim       參考機器人、牌譜重播、預測準確度評估、反事實決策評估
-  mj-tuner     （M6）可調參數的自動調整
+  mj-tuner     （M8）可調參數的自動調整
   mj-review    牌譜匯入與復盤解說
   mj-mjai      mjai 協定（和外部 AI 對戰）
   mj-cli       命令列工具 mj
 docs/          設計文件
 tools/oracle/  點數差異測試（Python）
-app/           （M7）Tauri 桌面 UI
+app/           （M9）Tauri 桌面 UI
 ```
