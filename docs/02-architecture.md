@@ -6,14 +6,14 @@
 |---|---|---|
 | 核心（規則、計算、策略、模擬） | **Rust**（Cargo workspace） | 自我對戰需要大量模擬；速度接近 C++ 且記憶體安全；可以編譯成 WASM |
 | 桌面 UI | **Tauri v2** ＋ TypeScript | 一套程式碼打包 Windows / macOS / Linux，執行檔小，可直接呼叫 Rust |
-| 策略設定 | 程式模組（Rust trait）＋ TOML profile | 邏輯寫在程式裡，權重、曲線和參數放在 TOML，方便調整、diff 和自動調參 |
+| 策略 | Rust 的 if／else 決策函式（`strategy-list` 目錄） | 判斷直接寫成人類讀得懂的程式，理由用 `ctx.note` 寫在判斷旁邊；計算交給 `mj-tools` |
 | 外部 AI 對接 | mjai 協定（JSON over stdio/TCP） | 社群標準，可以和 Mortal、akochan 等 AI 對戰 |
 
 ## Crate 相依關係
 
 ```
-mj-core ── mj-calc ── mj-rules ── mj-engine ── mj-strategy ─┬─ mj-sim ── mj-tuner
-                                     │                      └─ mj-review
+mj-core ── mj-calc ── mj-rules ── mj-engine ── mj-tools ── mj-strategy ─┬─ mj-sim ── mj-tuner
+                                     │                                  └─ mj-review
                                      └──────── mj-mjai
 mj-cli / app(Tauri) ── 以上全部
 ```
@@ -24,12 +24,13 @@ mj-cli / app(Tauri) ── 以上全部
 | `mj-calc` | 精確向聽（標準型、七對、國士）、進張、聽牌、和牌拆解；接受讀牌層的 `RemainingEstimate` | M1 ✅（和牌機率、期望打點：M2） |
 | `mj-rules` | `RuleSet` trait；`riichi`：全部役種與役滿、符、點數、`RiichiConfig` 規則選項（預設天鳳規則） | M1 ✅ |
 | `mj-engine` | 對局狀態機（`run_game`）、`Action`、`PlayerView`、`Player` trait、seed 牌山、事件流 | M1 ✅ |
-| `mj-strategy` | `Consideration`、`Modifier`、`Profile`、`Registry`、`Decider`、`Trace` | M0 框架 ✅ / M2+ 模組 |
-| `mj-sim` | 參考機器人（`RandomBot`、`GreedyBot`）；duplicate 對戰、rayon 平行化、統計 | M1 機器人 ✅ / M3 |
-| `mj-tuner` | CMA-ES 調參 | M6 |
+| `mj-tools` | 策略編輯者的純計算工具箱：手牌、動作後評估、看得到的牌、安全度事實（現物、筋、No Chance）、役的路線、點數、寶牌、牌桌 | M2.5 ✅ |
+| `mj-strategy` | `src/strategy-list/` 策略（main.rs、memory.rs、decision/、utils/predict/）；`framework/` 把引擎詢問拆成決策、記錄理由與預測；`build.rs` 自動產生模組；`TOOLS.md` 工具手冊 | M2.5 ✅ / M4+ 策略內容 |
+| `mj-sim` | 參考機器人（`RandomBot`、`GreedyBot`）；`replay` 牌譜重播；`predict_eval` 預測準確度；`counterfactual` 反事實決策評估；duplicate 對戰（M3） | M2.5 ✅ / M3 |
+| `mj-tuner` | 可調參數的自動調整（預測以準確度擬合、決策以反事實期望值） | M6 |
 | `mj-review` | 天鳳／mjai 牌譜匯入、Trace diff、解說模板 | M8 |
 | `mj-mjai` | mjai bridge | M6 |
-| `mj-cli` | 執行檔 `mj`：`check`、`selfplay`、`simulate`、`tune`、`review`、`play`、`serve` | 持續 |
+| `mj-cli` | 執行檔 `mj`：`strategies`、`nanikiru`、`selfplay`、`predict-eval`、`evaluate`、`simulate`、`review`、`play`、`serve` | 持續 |
 
 ## 關鍵設計
 
@@ -41,7 +42,7 @@ mj-cli / app(Tauri) ── 以上全部
 策略只拿得到 `PlayerView`，看不到牌山或他人手牌，從型別上就防止 AI「作弊」。復盤時也從同一個 `PlayerView` 重算，所以解說和實際打牌時的判斷一致。
 
 ### 可重現性
-牌山由 seed 決定；`Decider::decide` 是決定性的（同分時用穩定排序）。任何一局都可以用（seed, profiles）重播，方便除錯和比較。
+牌山由 seed 決定，策略是決定性的程式，所以任何一局都可以用（seed, 策略）重播。反事實評估正是利用這點：重播到決策點、強制改選另一個選項，再繼續打。
 
 ### UI 與核心的介面
 UI 只透過一層 API（`new_game`、`act`、`get_view`、`analyze`）和核心溝通：

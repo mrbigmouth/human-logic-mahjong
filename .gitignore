@@ -6,3 +6,4 @@ node_modules/
 /app/src-tauri/target/
 tools/oracle/.venv/
 __pycache__/
+claude.sh

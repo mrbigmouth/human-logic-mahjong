@@ -79,6 +79,11 @@ impl Wall {
         self.revealed = (self.revealed + 1).min(5);
     }
 
+    /// 全部 136 張牌（依牌山順序）。
+    pub fn tiles(&self) -> &[Pai] {
+        &self.tiles
+    }
+
     /// 已開槓數。
     pub fn kans(&self) -> usize {
         self.kans

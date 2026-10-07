@@ -1,6 +1,8 @@
-# 可解釋麻將策略 AI（Explainable Mahjong Strategy AI）
+# Human Logic Mahjong：人類思路的可解釋麻將 AI
 
-把人類打麻將的思路——牌效、牌型、讀牌、押引、局勢、詐騙——寫成**可程式化、可調權重、可解釋**的策略模組，透過大量自我對戰找出最佳組合，最後做成能**復盤並說明「為什麼」**的練習軟體。
+把人類打麻將的思路——牌效、牌型、讀牌、押引、局勢、詐騙——寫成**人類讀得懂的 if／else 決策程式**，
+用兩種獨立的評分（預測看準確度、決策看反事實期望值）找出思路的漏洞並改進，
+最後做成能**復盤並說明「為什麼」**的練習軟體。
 
 - 初始目標：策略編輯 → 電腦麻將 AI
 - 次要目標：AI 之間對戰，用 duplicate 方式分析勝率
@@ -14,7 +16,8 @@
 |---|---|
 | [docs/01-feasibility.md](docs/01-feasibility.md) | 可行性評估、風險、與現有 AI 的定位 |
 | [docs/02-architecture.md](docs/02-architecture.md) | 技術選型、crate 結構、資料流、跨平台 |
-| [docs/03-strategy-model.md](docs/03-strategy-model.md) | 六層策略模型、Utility AI、動態權重、Trace 與復盤 |
+| [docs/03-strategy-model.md](docs/03-strategy-model.md) | 策略模型：決策函式、對局記憶、預測與決策的兩種評分 |
+| [crates/mj-strategy/TOOLS.md](crates/mj-strategy/TOOLS.md) | **策略編輯者工具手冊**：目錄寫法、決策函式、`Ctx`、全部工具 |
 | [docs/04-milestones.md](docs/04-milestones.md) | 里程碑 M0–M9 與驗收條件 |
 | [docs/05-glossary.md](docs/05-glossary.md) | 術語對照表：程式中的日語拼音名稱、牌的記法（m 萬、p 筒、s 索、z 字）、役種中文名 |
 
@@ -26,11 +29,19 @@
 cargo build --workspace
 cargo test --workspace
 cargo run -p mj-cli -- --help                          # 執行檔名稱為 mj
-cargo run -p mj-cli -- check profiles/example.toml     # 驗證策略側寫
+cargo run -p mj-cli -- strategies                      # 列出所有策略
 
-# 自我對戰（參考機器人）。fuzz profile 會在每回合檢查牌數與點數守恆
+# 何切分析：執行策略的決策並顯示理由（最後一張是剛摸到的牌）
+cargo run -p mj-cli -- nanikiru 23m456p789s11z224s9m --dora 1s
+
+cargo build --release -p mj-cli
+S=tenhou-normal-4p-hanchan
+./target/release/mj selfplay --games 2000 --seats $S,greedy,greedy,random   # 對戰成績
+./target/release/mj predict-eval --strategy $S --games 300                 # 預測準確度
+./target/release/mj evaluate --strategy $S --games 20                      # 決策品質（反事實模擬）
+
+# fuzz 建置：每回合檢查牌數與點數守恆
 cargo build --profile fuzz -p mj-cli
-./target/fuzz/mj selfplay --games 10000 --bots greedy
 ./target/fuzz/mj selfplay --games 1 --dump game.jsonl  # 輸出完整事件紀錄
 ```
 
@@ -44,13 +55,13 @@ crates/
   mj-calc      向聽、進張、聽牌、和牌拆解（效能熱點）
   mj-rules     RuleSet trait；riichi：役、符、點數
   mj-engine    對局狀態機、Action、PlayerView、Player、事件紀錄
-  mj-strategy  Consideration / Modifier / Profile / Decider / Trace  ← 核心
-  mj-sim       參考機器人；duplicate 自我對戰與統計
-  mj-tuner     自動調參
+  mj-tools     純計算工具箱（策略編輯者使用）：手牌、安全度、役、點數、牌桌
+  mj-strategy  src/strategy-list/ 策略（if／else 決策程式）＋ framework 呼叫框架  ← 核心
+  mj-sim       參考機器人、牌譜重播、預測準確度評估、反事實決策評估
+  mj-tuner     （M6）可調參數的自動調整
   mj-review    牌譜匯入與復盤解說
   mj-mjai      mjai 協定（和外部 AI 對戰）
   mj-cli       命令列工具 mj
-profiles/      策略側寫（TOML）
 docs/          設計文件
 tools/oracle/  點數差異測試（Python）
 app/           （M7）Tauri 桌面 UI

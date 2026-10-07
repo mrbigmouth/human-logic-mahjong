@@ -73,8 +73,8 @@ pub(crate) struct KyokuOutcome {
 
 /// 牌桌：負責發送事件與詢問玩家。事件會寫入完整紀錄，並把遮蔽過的版本通知各家。
 pub(crate) struct Table<'p> {
-    pub players: &'p mut [Box<dyn Player>; 4],
-    pub log: Option<&'p mut Vec<Event>>,
+    pub players: [&'p mut dyn Player; 4],
+    pub log: Option<Vec<Event>>,
 }
 
 impl Table<'_> {
@@ -83,7 +83,7 @@ impl Table<'_> {
         for (s, p) in self.players.iter_mut().enumerate() {
             p.on_event(s as Seat, &ev.masked_for(s as Seat));
         }
-        if let Some(log) = self.log.as_deref_mut() {
+        if let Some(log) = self.log.as_mut() {
             log.push(ev);
         }
     }
@@ -214,6 +214,8 @@ pub(crate) struct Kyoku<'a, 'p> {
     kan_owners: Vec<Seat>,
     /// 已從牌山摸出的張數（牌數守恆檢查用）
     drawn_total: usize,
+    /// 本局已打出的張數（四家合計），用來編 `DiscardRecord::seq`
+    discard_count: u16,
 }
 
 /// 座位 `s` 往下家方向數 `k` 個的座位（1 = 下家、2 = 對家、3 = 上家）。
@@ -240,6 +242,7 @@ impl<'a, 'p> Kyoku<'a, 'p> {
             pending_dora: 0,
             kan_owners: Vec::new(),
             drawn_total: 0,
+            discard_count: 0,
         }
     }
 
@@ -702,11 +705,15 @@ impl<'a, 'p> Kyoku<'a, 'p> {
         ps.first_turn = false;
         ps.nagashi &= pai.tile.is_yaochu();
         ps.waits = waits(&ps.counts());
+        let seq = self.discard_count;
+        self.discard_count += 1;
+        let ps = self.ps_mut(seat);
         ps.river.push(DiscardRecord {
             pai,
             tsumogiri,
             riichi_declared: riichi,
             called: false,
+            seq,
         });
         self.table.emit(Event::Discard {
             seat,

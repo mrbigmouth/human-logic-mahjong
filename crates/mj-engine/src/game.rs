@@ -49,19 +49,34 @@ pub struct GameResult {
     pub hands_played: u32,
     /// 完整的事件紀錄（牌譜）；呼叫時沒有要求就是空的。
     pub log: Vec<Event>,
+    /// 每一局使用的牌山（與 `log` 一起保留；可用來重播或做反事實模擬）
+    pub walls: Vec<Vec<Pai>>,
 }
 
-/// 進行一整場對局。`players[0]` 是起家。`keep_log` = 是否保留完整牌譜。
+/// 進行一整場對局。`players[0]` 是起家。`keep_log` = 是否保留完整牌譜與牌山。
 pub fn run_game(
     cfg: &GameConfig,
     players: &mut [Box<dyn Player>; 4],
     keep_log: bool,
 ) -> Result<GameResult, EngineError> {
+    run_game_with(
+        cfg,
+        players.each_mut().map(|p| p.as_mut() as &mut dyn Player),
+        keep_log,
+    )
+}
+
+/// 同 [`run_game`]，但只借用玩家；對局結束後呼叫端還能取回玩家的狀態（例如決策紀錄）。
+pub fn run_game_with(
+    cfg: &GameConfig,
+    players: [&mut dyn Player; 4],
+    keep_log: bool,
+) -> Result<GameResult, EngineError> {
     let rules = &cfg.rules;
-    let mut log = Vec::new();
+    let mut walls = Vec::new();
     let mut table = Table {
         players,
-        log: keep_log.then_some(&mut log),
+        log: keep_log.then(Vec::new),
     };
     table.emit(Event::StartGame { seed: cfg.seed });
 
@@ -86,6 +101,9 @@ pub fn run_game(
             Some(tiles) => Wall::from_tiles(tiles.clone()),
             None => Wall::shuffled(hand_seed(cfg.seed, hands_played), rules.red_fives),
         };
+        if keep_log {
+            walls.push(wall.tiles().to_vec());
+        }
         let out = Kyoku::new(&setup, rules, wall, &mut table).run()?;
         hands_played += 1;
         scores = out.scores;
@@ -110,7 +128,8 @@ pub fn run_game(
                 scores,
                 ranks: ranking(&scores),
                 hands_played,
-                log,
+                log: table.log.take().unwrap_or_default(),
+                walls,
             });
         }
         // 沒有連莊就輪到下一位當莊（進到下一局）。

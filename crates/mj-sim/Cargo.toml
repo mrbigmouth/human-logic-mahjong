@@ -13,3 +13,5 @@ mj-strategy.workspace = true
 mj-calc.workspace = true
 rand.workspace = true
 rand_chacha.workspace = true
+mj-rules.workspace = true
+rayon.workspace = true

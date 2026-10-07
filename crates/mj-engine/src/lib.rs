@@ -12,7 +12,7 @@ mod kyoku;
 mod wall;
 
 pub use event::{DrawReason, Event, HandEnd};
-pub use game::{GameConfig, GameResult, run_game};
+pub use game::{GameConfig, GameResult, run_game, run_game_with};
 pub use kyoku::EngineError;
 pub use wall::{Wall, full_set, hand_seed};
 
@@ -60,6 +60,8 @@ pub struct DiscardRecord {
     pub riichi_declared: bool,
     /// 是否被別人吃碰槓拿走
     pub called: bool,
+    /// 本局的打牌順序（四家合計，從 0 開始）。用來判斷「某家立直之後」打出的牌等時間先後。
+    pub seq: u16,
 }
 
 /// 玩家在決策點看得到的全部資訊（自己的手牌＋公開資訊）。

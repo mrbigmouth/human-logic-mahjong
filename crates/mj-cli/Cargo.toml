@@ -17,6 +17,8 @@ mj-engine.workspace = true
 mj-rules.workspace = true
 rayon.workspace = true
 serde_json.workspace = true
+mj-calc.workspace = true
+mj-tools.workspace = true
 
 [[bin]]
 name = "mj"

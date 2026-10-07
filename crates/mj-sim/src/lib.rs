@@ -5,3 +5,6 @@
 //!   平行執行並輸出統計（平均順位、和牌率、放銃率、信賴區間）。
 
 pub mod bots;
+pub mod counterfactual;
+pub mod predict_eval;
+pub mod replay;

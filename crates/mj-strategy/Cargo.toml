@@ -1,6 +1,6 @@
 [package]
 name = "mj-strategy"
-description = "Explainable utility-AI: considerations, modifiers, profiles, traces"
+description = "Human-readable strategies (if/else decision code) and the framework that runs them"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,5 +10,11 @@ rust-version.workspace = true
 mj-core.workspace = true
 mj-engine.workspace = true
 mj-calc.workspace = true
+mj-rules.workspace = true
+mj-tools.workspace = true
 serde.workspace = true
-toml.workspace = true
+
+
+[dev-dependencies]
+rand.workspace = true
+rand_chacha.workspace = true

@@ -18,6 +18,7 @@ mj-sim = { path = "crates/mj-sim" }
 mj-tuner = { path = "crates/mj-tuner" }
 mj-review = { path = "crates/mj-review" }
 mj-mjai = { path = "crates/mj-mjai" }
+mj-tools = { path = "crates/mj-tools" }
 serde = { version = "1", features = ["derive"] }
 toml = "0.9"
 clap = { version = "4", features = ["derive"] }
