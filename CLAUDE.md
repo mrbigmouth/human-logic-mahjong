@@ -10,7 +10,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - 與使用者溝通、文件、**程式註解一律使用繁體中文**。
 - 函式與型別名稱多為日語羅馬拼音（shanten 向聽、ukeire 進張、kuikae 食替、furiten 振聽……），對照表在 `docs/05-glossary.md`。牌的記法：`m` 萬、`p` 筒、`s` 索、`z` 字（1z–7z = 東南西北白發中）、`0m/0p/0s` 赤五。
-- 設計文件：`docs/01`–`05`；里程碑與目前進度在 `docs/04-milestones.md`；策略編輯者手冊在 `crates/mj-strategy/TOOLS.md`。
+- 設計文件：`docs/01`–`05`；里程碑與目前進度在 `docs/04-milestones.md`。
+- 給策略編輯者的文件：`crates/mj-strategy/TOOLS.md`（目錄寫法、決策函式、工具清單）與 `crates/mj-strategy/DATA.md`（`Ctx`、`PlayerView`、`Event` 等所有資料結構）。修改這些結構或新增工具時要同步更新。
 
 ## 里程碑
 
@@ -25,7 +26,7 @@ M2.5 重構後的開發循環是「寫判斷 → 評估（預測看準確度、�
 |---|---|---|---|
 | M0–M2 | 基礎／策略 | 骨架、規則引擎（與 Python `mahjong` 零差異）、第一個牌效 AI | ✅ |
 | M2.5 | 基礎 | 策略架構重構：`mj-tools`、`strategy-list`、決策函式、記憶、`predict-eval`、`evaluate` | ✅ |
-| **M3** | 評估 | 反事實 v2（重抽對手手牌去除全知、名次期望值、自動加重打次數、抽樣差異大的決策點）、依情境分組的報告與 JSON 輸出、`mj simulate`（duplicate、A/A、策略版本比較）、`Book` 可登記常駐預測 | **下一步** |
+| **M3** | 評估 | 反事實 v2（重抽對手手牌去除全知、名次期望值、自動加重打次數、抽樣差異大的決策點）、依情境分組的報告與 JSON 輸出、`mj simulate`（duplicate、A/A、策略版本比較）；常駐預測 `book.predict_each_turn` 已先完成 | **進行中** |
 | M4 | 資料 | 天鳳牌譜匯入 → 事件紀錄 → 在決策點重建 `PlayerView`；對人類牌譜做預測評估 | |
 | M5 | 策略 | 防守與押引、安全牌管理、立直或默聽、鳴牌時機與打點 | |
 | M6 | 策略 | 讀牌：聽牌、聽牌張、打點預測（手切摸切、牌河順序、副露），以自我對戰與天鳳牌譜校準 | |
@@ -77,6 +78,7 @@ Crate 相依鏈：`mj-core → mj-calc → mj-rules → mj-engine → mj-tools �
 - **mj-strategy**：
   - `src/strategy-list/<規則名>/`：策略本體，給人編輯。`main.rs` 的 `register(&mut Book<Memory>)` 登記決策；`memory.rs` 的 `Memory`（需 `Default`）是整場共用的記憶，`observe` 由事件更新；`decision/*.rs` 每檔匯出一個 `decide(ctx, mem)`；`utils/predict/` 是預測函式。
   - `build.rs` 掃描 strategy-list，產生帶 `#[path]` 的模組樹與 `all_strategies()`（`-` 轉成 `_`），由 `lib.rs` 的 `include!` 引入。新增檔案不需要寫 `mod`。同策略內互相引用用 `super::super::...`；檔案開頭 `use crate::prelude::*;`。
+  - `memory.rs` 的 `observe` 只記「人類會記的事」（例如中巡起的連續摸切次數），預測函式讀 `mem` 而非 `ctx.view` 的完整紀錄；`book.predict_each_turn` 登記每回合執行、只用於評估的常駐預測。
   - `framework/player.rs`（`BookPlayer`）把引擎的單次詢問拆成依人類順序的決策：自己回合「九種九牌 → 和牌 → 開槓 → 何切 → 立直」，他家打牌「和牌 → 鳴牌」。決策結果必須是框架列出的選項之一，否則改用預設並標記 `invalid`。每個決策可記錄成 `DecisionRecord`（選項、選擇、`ctx.note` 理由、`ctx.claim` 預測），也可用 `Force` 強制指定選項。
 - **mj-sim**：參考機器人（`RandomBot`、`GreedyBot`）；`replay`（從完整事件紀錄重建任一時刻的手牌、判定振聽）；`predict_eval`（用 `judge` 判定每個 `Claim` 的真相，算 Brier、技巧分數、校準表）；`counterfactual`（重播到決策點、以 `Force` 改選各選項、重洗未摸牌山重打，比較該局點數得失）。
 

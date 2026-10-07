@@ -175,3 +175,66 @@ fn records_are_valid() {
             .any(|r| r.kind == DecisionKind::Discard && !r.notes.is_empty())
     );
 }
+
+mod tsumogiri_memory {
+    use mj_engine::Event;
+    use mj_strategy::strategy_list::tenhou_normal_4p_hanchan::memory::{
+        Memory, WATCH_FROM_TURN, observe,
+    };
+
+    fn discard(seat: u8, tsumogiri: bool) -> Event {
+        Event::Discard {
+            seat,
+            pai: "9s".parse().unwrap(),
+            tsumogiri,
+            riichi: false,
+        }
+    }
+
+    fn start() -> Event {
+        Event::StartKyoku {
+            round_wind: 0,
+            kyoku: 0,
+            honba: 0,
+            riichi_sticks: 0,
+            scores: [25_000; 4],
+            dora_indicator: "1z".parse().unwrap(),
+            hands: Default::default(),
+        }
+    }
+
+    /// 我是座位 0，觀察座位 2：中巡前不計；之後摸切累加、手切歸 0、鳴牌歸 0、新局重設。
+    #[test]
+    fn streak_rules() {
+        let mut m = Memory::default();
+        let me = 0;
+        for _ in 0..WATCH_FROM_TURN - 1 {
+            observe(me, &discard(2, true), &mut m);
+        }
+        assert_eq!(m.tsumogiri_streak[2], 0, "中巡前的摸切不記");
+        observe(me, &discard(2, true), &mut m);
+        observe(me, &discard(2, true), &mut m);
+        assert_eq!(m.tsumogiri_streak[2], 2);
+        observe(me, &discard(2, false), &mut m);
+        assert_eq!(m.tsumogiri_streak[2], 0, "手切歸 0");
+        observe(me, &discard(2, true), &mut m);
+        let p: mj_core::Pai = "5z".parse().unwrap();
+        let meld = mj_core::Meld {
+            kind: mj_core::MeldKind::Pon,
+            tiles: vec![p; 3],
+            called: Some(p),
+            from: Some(1),
+        };
+        observe(me, &Event::Call { seat: 2, meld }, &mut m);
+        assert_eq!(m.tsumogiri_streak[2], 0, "鳴牌歸 0");
+        // 自己的摸切不記。
+        for _ in 0..10 {
+            observe(me, &discard(0, true), &mut m);
+        }
+        assert_eq!(m.tsumogiri_streak[0], 0);
+        observe(me, &discard(2, true), &mut m);
+        observe(me, &start(), &mut m);
+        assert_eq!(m.tsumogiri_streak, [0; 4], "新局重設");
+        assert!(m.rivers.iter().all(|r| r.is_empty()));
+    }
+}

@@ -129,16 +129,14 @@ pub fn collect(strategy: Arc<dyn Strategy>, games: u64, seed: u64) -> Result<Vec
             let result = run_game_with(&cfg, refs, true).map_err(|e| e.to_string())?;
             let mut out = Vec::new();
             for sp in &mut sps {
-                for rec in sp.take_records() {
-                    for c in &rec.claims {
-                        if let Some(truth) = judge(&result.log, c) {
-                            out.push(Judged {
-                                source: c.source.clone(),
-                                category: c.claim.category(),
-                                p: c.claim.p(),
-                                truth,
-                            });
-                        }
+                for c in sp.take_claims() {
+                    if let Some(truth) = judge(&result.log, &c) {
+                        out.push(Judged {
+                            source: c.source.clone(),
+                            category: c.claim.category(),
+                            p: c.claim.p(),
+                            truth,
+                        });
                     }
                 }
             }

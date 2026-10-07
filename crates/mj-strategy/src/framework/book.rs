@@ -27,7 +27,11 @@ pub struct Book<M> {
     pub(crate) riichi: Option<DecideBool<M>>,
     pub(crate) call: Option<DecideCall<M>>,
     pub(crate) observe: Option<Observe<M>>,
+    pub(crate) each_turn: Option<PredictEachTurn<M>>,
 }
+
+/// 常駐預測：每次輪到自己時、在所有決策之前呼叫。只用來做預測（`ctx.claim`），不影響動作。
+pub type PredictEachTurn<M> = fn(&Ctx, &mut M);
 
 impl<M> Default for Book<M> {
     fn default() -> Self {
@@ -40,6 +44,7 @@ impl<M> Default for Book<M> {
             riichi: None,
             call: None,
             observe: None,
+            each_turn: None,
         }
     }
 }
@@ -83,5 +88,11 @@ impl<M> Book<M> {
     /// 每個事件都呼叫，用來更新對局記憶（例如記下誰總是即立直）。
     pub fn observe(&mut self, f: Observe<M>) {
         self.observe = Some(f);
+    }
+
+    /// 常駐預測：每次輪到自己時呼叫（在所有決策之前）。用來執行「決策不一定會用到、
+    /// 但希望持續被評估」的預測，例如每回合判斷三家是否聽牌。
+    pub fn predict_each_turn(&mut self, f: PredictEachTurn<M>) {
+        self.each_turn = Some(f);
     }
 }

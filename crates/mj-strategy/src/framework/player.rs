@@ -56,6 +56,8 @@ pub struct BookPlayer<M> {
     record: bool,
     force: Option<Force>,
     records: Vec<DecisionRecord>,
+    /// 全部預測紀錄（決策中做的與常駐預測），供預測評估使用
+    claims: Vec<ClaimRecord>,
     events_seen: usize,
     hand_index: u32,
     act_index: u32,
@@ -69,6 +71,7 @@ impl<M: Default> BookPlayer<M> {
             record,
             force,
             records: Vec::new(),
+            claims: Vec::new(),
             events_seen: 0,
             hand_index: 0,
             act_index: 0,
@@ -78,6 +81,26 @@ impl<M: Default> BookPlayer<M> {
     /// 取出目前累積的決策紀錄。
     pub fn take_records(&mut self) -> Vec<DecisionRecord> {
         std::mem::take(&mut self.records)
+    }
+
+    /// 取出目前累積的全部預測紀錄（決策中做的與常駐預測）。
+    pub fn take_claims(&mut self) -> Vec<ClaimRecord> {
+        std::mem::take(&mut self.claims)
+    }
+
+    /// 執行常駐預測（只在需要記錄時執行，因為它不影響動作）。
+    fn run_each_turn(&mut self, view: &PlayerView) {
+        let Some(f) = self.book.each_turn else {
+            return;
+        };
+        if !self.record {
+            return;
+        }
+        let mut ctx = Ctx::new(view, DecisionKind::Predict);
+        ctx.event_index = self.events_seen;
+        f(&ctx, &mut self.mem);
+        let (_, claims) = ctx.take_records();
+        self.claims.extend(claims);
     }
 
     /// 執行一個決策：呼叫決策函式（或使用強制指定的選項），檢查結果在選項中，並記錄。
@@ -112,6 +135,7 @@ impl<M: Default> BookPlayer<M> {
         };
         if self.record {
             let (notes, claims) = ctx.take_records();
+            self.claims.extend(claims.iter().cloned());
             self.records.push(DecisionRecord {
                 hand_index: self.hand_index.saturating_sub(1),
                 act_index: self.act_index,
@@ -175,6 +199,7 @@ impl<M: Default> BookPlayer<M> {
 
     /// 自己的回合。
     fn own_turn(&mut self, view: &PlayerView, legal: &[Action]) -> Action {
+        self.run_each_turn(view);
         if legal.contains(&Action::KyuushuKyuuhai) {
             let ctx = Ctx::new(view, DecisionKind::Kyuushu);
             if self.yes_no(ctx, "繼續打", "流局", self.book.kyuushu, false) {
@@ -292,12 +317,19 @@ pub trait Strategy: Send + Sync {
 
 /// 策略玩家：可以上桌，也可以取出決策紀錄。
 pub trait StrategyPlayer: Player + Send {
+    /// 取出決策紀錄。
     fn take_records(&mut self) -> Vec<DecisionRecord>;
+    /// 取出全部預測紀錄（決策中做的與常駐預測）。
+    fn take_claims(&mut self) -> Vec<ClaimRecord>;
 }
 
 impl<M: Default + Send> StrategyPlayer for BookPlayer<M> {
     fn take_records(&mut self) -> Vec<DecisionRecord> {
         BookPlayer::take_records(self)
+    }
+
+    fn take_claims(&mut self) -> Vec<ClaimRecord> {
+        BookPlayer::take_claims(self)
     }
 }
 
@@ -467,5 +499,41 @@ mod tests {
             consumed: [p("1z"), p("1z")],
         };
         assert_eq!(pl.act(&v, &[pon, Action::Pass]), Action::Pass);
+    }
+
+    /// 常駐預測：每次自己的回合都執行、記錄預測，但不影響動作；不記錄時不執行。
+    #[test]
+    fn each_turn_predictions_are_recorded() {
+        let mut b: Book<u32> = Book::default();
+        b.discard(|_, _| "5z".parse().unwrap());
+        b.riichi(|_, _| false);
+        b.predict_each_turn(|ctx, n| {
+            *n += 1;
+            ctx.claim("test", crate::framework::Claim::Tenpai { seat: 2, p: 0.5 });
+        });
+        let b = Arc::new(b);
+        let hand = "123m456p789s11225z";
+        let mut pl = BookPlayer::new(b.clone(), true, None);
+        let a = pl.act(&view(hand), &legal(hand));
+        assert_eq!(
+            a,
+            Action::Discard {
+                pai: p("5z"),
+                tsumogiri: false
+            }
+        );
+        assert_eq!(pl.mem, 1);
+        let claims = pl.take_claims();
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].source, "test");
+        assert!(
+            pl.take_records()
+                .iter()
+                .all(|r| r.kind != DecisionKind::Predict)
+        );
+
+        let mut quiet = BookPlayer::new(b, false, None);
+        quiet.act(&view(hand), &legal(hand));
+        assert_eq!(quiet.mem, 0);
     }
 }

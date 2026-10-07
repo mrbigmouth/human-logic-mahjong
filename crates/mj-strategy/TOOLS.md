@@ -51,26 +51,20 @@ src/strategy-list/
 - 回傳值必須是選項之一；回傳不在選項中的值時，框架改用預設選項並在紀錄中標記 `invalid`。
 - 只有一個選項時（例如立直後只能摸切）不會呼叫決策函式。
 
-## 3. `Ctx`：決策情境
+另外兩種登記（不是決策）：
 
-| 方法 | 回傳 | 說明 |
+| 登記 | 函式簽名 | 何時呼叫 |
 |---|---|---|
-| `ctx.view` | `&PlayerView` | 看得到的全部資訊：手牌、牌河、副露、點數、寶牌指示牌、立直狀態…… |
-| `ctx.kind` | `DecisionKind` | 這次是哪一種決策 |
-| `ctx.me()` | `Seat` | 自己的座位 |
-| `ctx.hand()` | `TileCounts` | 門前手牌 |
-| `ctx.shanten()` | `i8` | 目前向聽數（摸牌後取打出最好一張後的值） |
-| `ctx.after_discard(pai)` | `AfterEval` | 打出這張後的向聽數與進張 |
-| `ctx.after_call(choice)` | `AfterEval` | 這樣鳴牌（再打最好的一張）後的手牌；`Pass` = 不鳴 |
-| `ctx.after(&action)` | `AfterEval` | 任何動作之後的手牌 |
-| `ctx.remaining()` | `&[f32; 34]` | 每種牌還剩幾張（4 − 看得到的張數） |
-| `ctx.standing()` | `Standing` | 名次、與上下名的點差、剩幾局、是否最終局 |
-| `ctx.dora_value(tile)` | `u8` | 這種牌值幾張寶牌 |
-| `ctx.offered()` | `Option<(Seat, Pai)>` | 鳴牌／榮和時，他家打出的牌 |
-| `ctx.note("…")` | | **寫下判斷理由**，復盤時顯示 |
-| `ctx.claim(來源, Claim)` | | 記錄一個預測（第 5 節） |
+| `book.observe(f)` | `fn(Seat, &Event, &mut Memory)` | 每個事件；用來更新對局記憶 |
+| `book.predict_each_turn(f)` | `fn(&Ctx, &mut Memory)` | 每次輪到自己、在所有決策之前；只做預測（`ctx.claim`），不影響動作。用於「決策不一定用到、但希望持續被評估」的預測，只在評估（有記錄）時執行 |
 
-`AfterEval` 欄位：`shanten`（向聽數，聽牌 0、和牌 −1）、`ukeire`（進張張數；聽牌時 = 聽牌張剩餘數）、`win`。
+## 3. `Ctx` 與所有資料結構
+
+`Ctx` 的欄位與方法、`PlayerView` 的每個欄位、牌河（含摸切 `tsumogiri`、打牌順序 `seq`）、副露、
+`Event`（observe 收到的事件）、`Claim`、`Score` 等，完整說明見 **[DATA.md](DATA.md)**。
+
+最常用的幾個：`ctx.discard_candidates()`、`ctx.call_options()`、`ctx.after_discard(pai)`（打出後的向聽與進張）、
+`ctx.shanten()`、`ctx.standing()`、`ctx.note("理由")`、`ctx.claim(來源, 預測)`。
 
 ## 4. 工具箱 `tools::*`
 
@@ -194,3 +188,10 @@ mj evaluate --strategy tenhou-normal-4p-hanchan --games 20 --samples 20 --rollou
 - 某家用筋牌騙和過牌（他的筋牌不可信）
 
 決策函式收到 `&mut Memory`，可以讀也可以寫。
+
+**慣例：預測函式讀 `mem`，不直接讀 `ctx.view` 的完整紀錄。** `ctx.view` 記得每一張牌的摸切與順序，
+但人類不會全部記住；把「人類會記的事」寫在 `observe` 裡，預測讀記憶，策略的思路才是人類做得到的。
+需要完整紀錄（例如復盤時指出「其實可以注意到」）才直接讀 `ctx.view`。
+
+範例（`tenhou-normal-4p-hanchan`）：`tsumogiri_streak` 從中巡（`WATCH_FROM_TURN = 6`）起記錄各家連續摸切次數，
+手切或鳴牌歸 0；`predict::tenpai` 依此提高副露者的聽牌機率。
