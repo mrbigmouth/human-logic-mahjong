@@ -1,4 +1,4 @@
-//! 預測準確度評估：讓策略自我對戰、收集預測紀錄，再用全知視角判定每個預測的真相。
+//! 預測準確度評估：讓策略自我對戰（或旁觀牌譜中的真人對局）、收集預測紀錄，再用全知視角判定每個預測的真相。
 //!
 //! 評分指標（都只看預測本身，與輸贏無關）：
 //! - Brier 分數：(p − 真相)² 的平均，越小越好；
@@ -8,8 +8,10 @@
 
 use crate::replay::{furiten_at, hand_winners_after, hands_at};
 use mj_engine::{Event, GameConfig, Player, run_game_with};
+use mj_paifu::GameRecord;
+use mj_paifu::replay::replay;
 use mj_rules::riichi::RiichiConfig;
-use mj_strategy::framework::{Claim, ClaimRecord, Strategy, TargetSituation};
+use mj_strategy::framework::{Claim, ClaimRecord, Strategy, StrategyPlayer, TargetSituation};
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -178,6 +180,25 @@ pub fn metrics(items: &[&Judged]) -> Metrics {
     }
 }
 
+/// 取出玩家的全部預測並用完整事件紀錄判定真相。
+fn judge_all(players: &mut [Box<dyn StrategyPlayer>], log: &[Event]) -> Vec<Judged> {
+    let mut out = Vec::new();
+    for sp in players {
+        for c in sp.take_claims() {
+            if let Some(truth) = judge(log, &c) {
+                out.push(Judged {
+                    source: c.source.clone(),
+                    category: c.claim.category(),
+                    p: c.claim.p(),
+                    truth,
+                    target: c.target,
+                });
+            }
+        }
+    }
+    out
+}
+
 /// 讓 `strategy` 四家自我對戰 `games` 場，收集並判定所有預測。
 pub fn collect(strategy: Arc<dyn Strategy>, games: u64, seed: u64) -> Result<Vec<Judged>, String> {
     let per_game: Vec<Vec<Judged>> = (0..games)
@@ -190,24 +211,40 @@ pub fn collect(strategy: Arc<dyn Strategy>, games: u64, seed: u64) -> Result<Vec
             };
             let cfg = GameConfig::new(RiichiConfig::TENHOU, seed.wrapping_add(g));
             let result = run_game_with(&cfg, refs, true).map_err(|e| e.to_string())?;
-            let mut out = Vec::new();
-            for sp in &mut sps {
-                for c in sp.take_claims() {
-                    if let Some(truth) = judge(&result.log, &c) {
-                        out.push(Judged {
-                            source: c.source.clone(),
-                            category: c.claim.category(),
-                            p: c.claim.p(),
-                            truth,
-                            target: c.target,
-                        });
-                    }
-                }
-            }
-            Ok(out)
+            Ok(judge_all(&mut sps, &result.log))
         })
         .collect::<Result<_, String>>()?;
     Ok(per_game.into_iter().flatten().collect())
+}
+
+/// 在牌譜（例如人類的天鳳對局）上評估預測：四家的位置各放一個策略「旁觀」，
+/// 收到同樣的事件與詢問並做預測，但動作照牌譜。預測的對象因此是真人的手牌。
+///
+/// 回傳（判定後的預測, 無法重播的牌譜與原因）。
+pub fn collect_records(
+    strategy: Arc<dyn Strategy>,
+    records: &[GameRecord],
+) -> (Vec<Judged>, Vec<String>) {
+    let per_game: Vec<Result<Vec<Judged>, String>> = records
+        .par_iter()
+        .map(|rec| {
+            let mut sps: Vec<_> = (0..4).map(|_| strategy.player(true, None)).collect();
+            let shadows: [Option<&mut dyn Player>; 4] = {
+                let mut it = sps.iter_mut().map(|p| Some(p.as_mut() as &mut dyn Player));
+                std::array::from_fn(|_| it.next().unwrap())
+            };
+            let r = replay(rec, shadows, false).map_err(|e| format!("{}: {e}", rec.id))?;
+            Ok(judge_all(&mut sps, &r.result.log))
+        })
+        .collect();
+    let (mut judged, mut errs) = (Vec::new(), Vec::new());
+    for r in per_game {
+        match r {
+            Ok(j) => judged.extend(j),
+            Err(e) => errs.push(e),
+        }
+    }
+    (judged, errs)
 }
 
 /// 依（預測函式、類別）分組計算指標。

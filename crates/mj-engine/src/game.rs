@@ -209,7 +209,14 @@ fn play(cfg: &GameConfig, table: &mut Table, start: Start) -> Result<GameResult,
             });
         }
         let ended = cfg.max_hands.is_some_and(|m| hands_played >= m)
-            || match_over(rules, index, &scores, dealer, out.dealer_continues);
+            || match_over(
+                rules,
+                index,
+                &scores,
+                dealer,
+                out.dealer_continues,
+                out.aborted,
+            );
         if ended {
             // 場上剩下的供託歸第一名。
             let top = ranking(&scores).iter().position(|&r| r == 0).unwrap();
@@ -234,8 +241,8 @@ fn play(cfg: &GameConfig, table: &mut Table, start: Start) -> Result<GameResult,
 ///
 /// - 擊飛：有人低於 0 點立刻結束。
 /// - 最終局（半莊為南四局）以後，有人達到返點（30000）就結束；
-///   但莊家連莊且不是第一名時繼續（莊家有權繼續追分）。莊家連莊且為第一名時，
-///   和了止め（agari-yame）讓對局結束。
+///   但莊家連莊且不是第一名時繼續（莊家有權繼續追分）。莊家和牌或流局聽牌而連莊、且為第一名時，
+///   和了止め（agari-yame，天鳳也包含聽牌止め）讓對局結束；途中流局（`aborted`）的連莊不適用。
 /// - 延長的風場（西入）是突然死亡制，最後一局（西四）結束時一定結束（莊家連莊除外）。
 fn match_over(
     rules: &RiichiConfig,
@@ -243,6 +250,7 @@ fn match_over(
     scores: &[i32; 4],
     dealer: u8,
     dealer_continues: bool,
+    aborted: bool,
 ) -> bool {
     let regular: u8 = if rules.hanchan { 8 } else { 4 };
     if rules.bust_ends_game && scores.iter().any(|&s| s < 0) {
@@ -251,7 +259,8 @@ fn match_over(
     let last_phase = index + 1 >= regular;
     let reached = scores.iter().any(|&s| s >= rules.target_points);
     let dealer_top = ranking(scores)[usize::from(dealer)] == 0;
-    if last_phase && reached && (!dealer_continues || (rules.agari_yame && dealer_top)) {
+    if last_phase && reached && (!dealer_continues || (rules.agari_yame && dealer_top && !aborted))
+    {
         return true;
     }
     !dealer_continues && index + 1 >= regular + 4
@@ -287,6 +296,7 @@ mod tests {
             3,
             &[45_000, 20_000, 20_000, 15_000],
             3,
+            false,
             false
         ));
         // 南四局，有人超過 30000 → 結束。
@@ -295,6 +305,7 @@ mod tests {
             S4,
             &[35_000, 25_000, 20_000, 20_000],
             3,
+            false,
             false
         ));
         // 南四局，沒人達到 30000 → 西入。
@@ -303,6 +314,7 @@ mod tests {
             S4,
             &[28_000, 26_000, 24_000, 22_000],
             3,
+            false,
             false
         ));
         // 莊家連莊且為第一名、超過 30000 → 和了止め，結束。
@@ -311,7 +323,8 @@ mod tests {
             S4,
             &[20_000, 20_000, 25_000, 35_000],
             3,
-            true
+            true,
+            false
         ));
         // 莊家連莊但不是第一名 → 莊家繼續。
         assert!(!match_over(
@@ -319,7 +332,8 @@ mod tests {
             S4,
             &[32_000, 20_000, 23_000, 25_000],
             3,
-            true
+            true,
+            false
         ));
         // 西四局：莊家沒有連莊就一定結束。
         assert!(match_over(
@@ -327,10 +341,27 @@ mod tests {
             W4,
             &[28_000, 26_000, 24_000, 22_000],
             3,
+            false,
             false
         ));
+        // 莊家第一名但連莊是因為途中流局（九種九牌等）→ 不適用和了止め，繼續（天鳳規則）。
+        assert!(!match_over(
+            &R,
+            S4,
+            &[20_000, 20_000, 25_000, 35_000],
+            3,
+            true,
+            true
+        ));
         // 有人低於 0 點 → 立刻結束（擊飛）。
-        assert!(match_over(&R, 1, &[-100, 40_100, 30_000, 30_000], 1, false));
+        assert!(match_over(
+            &R,
+            1,
+            &[-100, 40_100, 30_000, 30_000],
+            1,
+            false,
+            false
+        ));
     }
 
     /// 同分時座位編號小者名次在前。

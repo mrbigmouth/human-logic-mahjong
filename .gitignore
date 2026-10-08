@@ -7,3 +7,4 @@ node_modules/
 tools/oracle/.venv/
 __pycache__/
 claude.sh
+/data/

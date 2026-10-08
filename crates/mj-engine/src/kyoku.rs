@@ -111,6 +111,8 @@ pub(crate) struct KyokuOutcome {
     pub winners: Vec<Seat>,
     /// 是否連莊（莊家和牌、莊家流局聽牌、途中流局）
     pub dealer_continues: bool,
+    /// 是否為途中流局（九種九牌、四風連打等）：連莊，但最終局不適用和了止め
+    pub aborted: bool,
 }
 
 /// 牌桌：負責發送事件與詢問玩家。事件會寫入完整紀錄，並把遮蔽過的版本通知各家。
@@ -793,8 +795,11 @@ impl<'a, 'p> Kyoku<'a, 'p> {
             }
             let mut c = ps.counts();
             c.add(pai.tile);
-            let shape_ok = !kokushi_only || is_kokushi(&c);
-            if shape_ok && !ps.furiten() && self.try_score(s, pai, way).is_some() {
+            if kokushi_only && !is_kokushi(&c) {
+                // 暗槓只有國士無雙能搶；其他人本來就不能和，不算放過（不會振聽）。
+                continue;
+            }
+            if !ps.furiten() && self.try_score(s, pai, way).is_some() {
                 if self.table.snapshot_due(s) {
                     return Err(Halt::Unsupported);
                 }
@@ -1253,7 +1258,9 @@ impl<'a, 'p> Kyoku<'a, 'p> {
             },
             deltas: [0; 4],
         });
-        self.finish(Vec::new(), true)
+        let mut out = self.finish(Vec::new(), true);
+        out.aborted = true;
+        out
     }
 
     /// 結束本局，回傳結果。
@@ -1267,6 +1274,7 @@ impl<'a, 'p> Kyoku<'a, 'p> {
             riichi_sticks: self.st.sticks,
             winners,
             dealer_continues,
+            aborted: false,
         }
     }
 }

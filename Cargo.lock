@@ -194,6 +194,7 @@ dependencies = [
  "mj-calc",
  "mj-core",
  "mj-engine",
+ "mj-paifu",
  "mj-review",
  "mj-rules",
  "mj-sim",
@@ -233,6 +234,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mj-paifu"
+version = "0.1.0"
+dependencies = [
+ "mj-core",
+ "mj-engine",
+ "mj-rules",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "mj-review"
 version = "0.1.0"
 dependencies = [
@@ -260,6 +272,7 @@ dependencies = [
  "mj-calc",
  "mj-core",
  "mj-engine",
+ "mj-paifu",
  "mj-rules",
  "mj-strategy",
  "rand",

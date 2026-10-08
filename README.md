@@ -42,6 +42,11 @@ S=tenhou-normal-4p-hanchan
 ./target/release/mj evaluate --strategy $S --games 20                      # 決策品質（反事實模擬）
 ./target/release/mj simulate $S greedy --blocks 1000                        # duplicate 對戰比較
 
+# 天鳳牌譜：下載鳳凰卓牌譜（只保留最近幾天）→ 用引擎重播並比對點數 → 對真人對局評估預測
+tools/fetch-tenhou.sh 2026100700 2026100701 -n 20
+./target/release/mj import data/tenhou
+./target/release/mj predict-eval --strategy $S --logs data/tenhou
+
 # fuzz 建置：每回合檢查牌數與點數守恆
 cargo build --profile fuzz -p mj-cli
 ./target/fuzz/mj selfplay --games 1 --dump game.jsonl  # 輸出完整事件紀錄
@@ -61,10 +66,12 @@ crates/
   mj-strategy  src/strategy-list/ 策略（if／else 決策程式）＋ framework 呼叫框架  ← 核心
   mj-sim       參考機器人、牌譜重播、預測準確度評估、反事實決策評估、duplicate 對戰
   mj-tuner     （M8）可調參數的自動調整
-  mj-review    牌譜匯入與復盤解說
+  mj-paifu     牌譜匯入（天鳳 mjlog XML／JSON）：引擎重播、比對點數、重建每個決策點的視角
+  mj-review    （M7）復盤解說
   mj-mjai      mjai 協定（和外部 AI 對戰）
   mj-cli       命令列工具 mj
 docs/          設計文件
 tools/oracle/  點數差異測試（Python）
+tools/fetch-tenhou.sh  天鳳牌譜下載（存到 data/tenhou/，不納入版本控制）
 app/           （M9）Tauri 桌面 UI
 ```

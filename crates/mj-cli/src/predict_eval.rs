@@ -1,20 +1,41 @@
 //! `mj predict-eval`：預測準確度評估（與勝負無關，只看預測對不對）。
 
-use mj_sim::predict_eval::{Dimension, by_dimension, collect, summarize};
+use mj_sim::predict_eval::{Dimension, by_dimension, collect, collect_records, summarize};
 use mj_strategy::find_strategy;
 use mj_strategy::framework::explain::{pad, pad_left};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-pub fn run(strategy: &str, games: u64, seed: u64) -> Result<(), String> {
-    let st = find_strategy(strategy).ok_or_else(|| format!("找不到策略 {strategy}"))?;
+/// `logs` 不是空的時改用牌譜（策略旁觀真人對局），否則自我對戰 `games` 場。
+pub fn run(strategy: &str, logs: &[PathBuf], games: u64, seed: u64) -> Result<(), String> {
+    let st: Arc<dyn mj_strategy::framework::Strategy> =
+        Arc::from(find_strategy(strategy).ok_or_else(|| format!("找不到策略 {strategy}"))?);
     let start = Instant::now();
-    let judged = collect(Arc::from(st), games, seed)?;
-    println!(
-        "策略 {strategy}：{games} 場對局，判定 {} 筆預測（{:.1} 秒）",
-        judged.len(),
-        start.elapsed().as_secs_f64()
-    );
+    let judged = if logs.is_empty() {
+        let judged = collect(st, games, seed)?;
+        println!(
+            "策略 {strategy}：自我對戰 {games} 場，判定 {} 筆預測（{:.1} 秒）",
+            judged.len(),
+            start.elapsed().as_secs_f64()
+        );
+        judged
+    } else {
+        let (records, mut errors) = mj_paifu::load_all(logs);
+        let (judged, replay_errors) = collect_records(st, &records);
+        let usable = records.len() - replay_errors.len();
+        errors.extend(replay_errors);
+        println!(
+            "策略 {strategy}：旁觀牌譜 {usable} 場（無法使用 {} 場），判定 {} 筆預測（{:.1} 秒）",
+            errors.len(),
+            judged.len(),
+            start.elapsed().as_secs_f64()
+        );
+        for e in errors.iter().take(5) {
+            println!("  ✗ {e}");
+        }
+        judged
+    };
     println!();
     println!(
         "{}{}{}{}{}{}{}",

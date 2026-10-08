@@ -1,6 +1,7 @@
 //! 命令列工具 `mj`。每個子命令對應一個里程碑的功能；尚未實作的會提示預計在哪個里程碑完成。
 
 mod evaluate;
+mod import;
 mod nanikiru;
 mod predict_eval;
 mod selfplay;
@@ -52,11 +53,27 @@ enum Command {
         #[arg(long)]
         dump: Option<PathBuf>,
     },
-    /// 預測準確度評估：讓策略自我對戰，用全知視角檢查每個預測，輸出各預測函式的準確度
+    /// 匯入牌譜（天鳳 mjlog XML／JSON）：用引擎重播並與原牌譜的點數比對
+    Import {
+        /// 牌譜檔或目錄（目錄中的 .xml／.mjlog／.json；同一個牌譜 ID 只算一次）
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        /// 把引擎的事件紀錄寫到這個目錄（每場一個 <牌譜 ID>.events.json）
+        #[arg(long)]
+        dump: Option<PathBuf>,
+        /// 最多列出幾個失敗原因
+        #[arg(long, default_value_t = 20)]
+        show_errors: usize,
+    },
+    /// 預測準確度評估：讓策略自我對戰（或旁觀牌譜中的真人對局），用全知視角檢查每個預測，
+    /// 輸出各預測函式的準確度
     PredictEval {
         /// 策略名稱（四家都用這個策略）
         #[arg(long, default_value = "tenhou-normal-4p-hanchan")]
         strategy: String,
+        /// 改用這些牌譜（檔案或目錄）：策略旁觀真人對局並預測，不自我對戰
+        #[arg(long, num_args = 1..)]
+        logs: Vec<PathBuf>,
         /// 對局（半莊）數
         #[arg(long, default_value_t = 200)]
         games: u64,
@@ -151,12 +168,18 @@ fn main() -> ExitCode {
             no_rotate,
             dump,
         } => return exit(selfplay::run(games, seed, &seats, !no_rotate, dump)),
+        Command::Import {
+            paths,
+            dump,
+            show_errors,
+        } => return exit(import::run(&paths, dump, show_errors)),
         Command::PredictEval {
             strategy,
+            logs,
             games,
             seed,
         } => {
-            return exit(predict_eval::run(&strategy, games, seed));
+            return exit(predict_eval::run(&strategy, &logs, games, seed));
         }
         Command::Evaluate {
             strategy,

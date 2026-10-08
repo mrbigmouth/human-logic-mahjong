@@ -27,8 +27,8 @@ M2.5 重構後的開發循環是「寫判斷 → 評估（預測看準確度、�
 | M0–M2 | 基礎／策略 | 骨架、規則引擎（與 Python `mahjong` 零差異）、第一個牌效 AI | ✅ |
 | M2.5 | 基礎 | 策略架構重構：`mj-tools`、`strategy-list`、決策函式、記憶、`predict-eval`、`evaluate` | ✅ |
 | M3 | 評估 | 局面快照與重抽（去除全知）、名次點、自動加重打、依情境分組的報告與 JSON、`mj simulate`（duplicate）、常駐預測 | ✅ |
-| **M4** | 資料 | 天鳳牌譜匯入 → 事件紀錄 → 在決策點重建 `PlayerView`；對人類牌譜做預測評估 | **下一步** |
-| M5 | 策略 | 防守與押引、安全牌管理、立直或默聽、鳴牌時機與打點 | |
+| M4 | 資料 | 天鳳牌譜匯入（`mj-paifu`）→ 引擎重播並比對點數 → 事件紀錄與每個決策點的 `PlayerView`；對人類牌譜做預測評估 | ✅ |
+| **M5** | 策略 | 防守與押引、安全牌管理、立直或默聽、鳴牌時機與打點 | **下一步** |
 | M6 | 策略 | 讀牌：聽牌、聽牌張、打點預測（手切摸切、牌河順序、副露），以自我對戰與天鳳牌譜校準 | |
 | M7 | 產品 | 復盤（CLI／JSON）：使用者牌譜逐手比對，附策略理由與反事實期望值、失誤統計 | |
 | M8 | 評估 | 具名可調參數與自動調整（預測以對數損失、決策以反事實期望值）；mjai 介接與強 AI 比對 | |
@@ -58,14 +58,20 @@ mj selfplay --games 2000 --seats tenhou-normal-4p-hanchan,greedy,greedy,random  
 mj predict-eval --strategy tenhou-normal-4p-hanchan --games 300    # 預測準確度
 mj evaluate --strategy tenhou-normal-4p-hanchan --games 20         # 決策品質（反事實模擬；--metric points 較快、雜訊小）
 mj simulate tenhou-normal-4p-hanchan greedy --blocks 1000           # duplicate 對戰（成對比較兩個策略／版本）
+mj import data/tenhou                                               # 匯入牌譜：引擎重播並與原牌譜比對點數
+mj predict-eval --logs data/tenhou                                  # 策略旁觀真人對局，評估預測準確度
 ```
+
+- 天鳳牌譜用 `tools/fetch-tenhou.sh <YYYYMMDDHH ...> -n <每小時場數>` 下載到 `data/tenhou/`（已 gitignore；天鳳只保留最近幾天的每小時清單）。
+  `crates/mj-paifu/tests/data/` 有幾場匿名化的牌譜供測試；`data/tenhou/` 有資料時測試也會一併重播。
 
 - `--profile fuzz`（Cargo.toml 定義：release 速度＋debug assertions）：引擎每回合檢查牌數與點數守恆，大量自我對戰即為模糊測試：`cargo build --profile fuzz -p mj-cli && ./target/fuzz/mj selfplay ...`
 - 修改向聽或點數計算後，必須跑 Python 差異測試（與獨立的 `mahjong` 函式庫比對，目前 0 差異），步驟在 `docs/02-architecture.md` 的「測試策略」。venv 在 `tools/oracle/.venv`（已 gitignore，路徑寫死在 venv 內，專案搬移後需重建）。
 
 ## 架構
 
-Crate 相依鏈：`mj-core → mj-calc → mj-rules → mj-engine → mj-tools → mj-strategy → mj-sim → mj-cli`
+Crate 相依鏈：`mj-core → mj-calc → mj-rules → mj-engine → mj-tools → mj-strategy → mj-sim → mj-cli`，
+另有 `mj-engine → mj-paifu → mj-sim`
 （`mj-tuner`、`mj-review`、`mj-mjai` 目前只是預留的空殼）。
 
 - **mj-core**：`Tile`（34 種，編號 0–33）、`Pai`（牌＋赤五旗標）、`TileCounts`（34 格牌數表，計算都用它）、`Meld`。
@@ -82,7 +88,8 @@ Crate 相依鏈：`mj-core → mj-calc → mj-rules → mj-engine → mj-tools �
   - `memory.rs` 的 `observe` 只記「人類會記的事」（例如中巡起的連續摸切次數），預測函式讀 `mem` 而非 `ctx.view` 的完整紀錄；`book.predict_each_turn` 登記每回合執行、只用於評估的常駐預測。
   - `framework/player.rs`（`BookPlayer`）把引擎的單次詢問拆成依人類順序的決策：自己回合「九種九牌 → 和牌 → 開槓 → 何切 → 立直」，他家打牌「和牌 → 鳴牌」。決策結果必須是框架列出的選項之一，否則改用預設並標記 `invalid`。每個決策可記錄成 `DecisionRecord`（選項、選擇、`ctx.note` 理由、`ctx.claim` 預測），也可用 `Force` 強制指定選項。
 - **mj-engine 的快照**（`snapshot.rs`）：`capture_snapshot` 重播到「即將第 n 次詢問某座位」時保存局面；`Snapshot::determinize` 依決策者視角重抽看不到的牌；`resume_game` 從快照繼續。快照點依賴 `Table.asks`（每座位被詢問次數 = 玩家的 `act_index`）。
-- **mj-sim**：參考機器人（`RandomBot`、`GreedyBot`）；`replay`（從完整事件紀錄重建任一時刻的手牌、判定振聽）；`predict_eval`（用 `judge` 判定每個 `Claim` 的真相，算 Brier、技巧分數、校準表，依被預測者情境分組）；`counterfactual`（快照 → 重抽 R 個世界 → 各選項以 `Force` 強制後重打，名次點或本局點數，自動加重打）；`duplicate`（同牌山座位輪換的成對比較）。
+- **mj-paifu**：牌譜匯入。`tenhou_xml`／`tenhou_json` 解析成 `GameRecord`（配牌、依時間排序的 `Step`、原牌譜點數）；`replay` 由配牌與摸牌順序還原牌山（`build_wall`）、四家用共用進度的 `ScriptedPlayer` 照牌譜出牌讓引擎重打，再比對每局開始／結束與終局點數。可記錄每次詢問的 `DecisionPoint`（視角、合法動作、牌譜的選擇），也可掛策略當「旁觀者」（收到事件與詢問、做預測，動作照牌譜）。新格式只要輸出 `GameRecord` 即可。
+- **mj-sim**：參考機器人（`RandomBot`、`GreedyBot`）；`replay`（從完整事件紀錄重建任一時刻的手牌、判定振聽）；`predict_eval`（用 `judge` 判定每個 `Claim` 的真相，算 Brier、技巧分數、校準表，依被預測者情境分組；`collect_records` 在牌譜上旁觀評估）；`counterfactual`（快照 → 重抽 R 個世界 → 各選項以 `Force` 強制後重打，名次點或本局點數，自動加重打）；`duplicate`（同牌山座位輪換的成對比較）。
 
 ### 重要的不變條件
 
@@ -90,4 +97,5 @@ Crate 相依鏈：`mj-core → mj-calc → mj-rules → mj-engine → mj-tools �
 - 策略的 `Memory` 必須實作 `Default` 與 `Clone`（反事實評估在快照點複製玩家）。
 - 新增一種預測（`framework/claim.rs` 的 `Claim`）時，必須同時在 `mj-sim/src/predict_eval.rs` 的 `judge` 寫出全知視角下的真相怎麼算。
 - `DiscardRecord.seq` 是本局全體打牌順序，現物、立直後等時序判斷都依賴它。
+- 修改引擎的規則行為後，要確認天鳳牌譜仍能零差異重播（`cargo test -p mj-paifu`，有下載資料時再跑 `mj import data/tenhou`）。
 - 已知規則簡化（包牌複合役滿、純空聽、雙響供託歸屬）列在 `docs/02-architecture.md` 末尾；修改規則行為時一併更新。

@@ -14,6 +14,7 @@
 ```
 mj-core ── mj-calc ── mj-rules ── mj-engine ── mj-tools ── mj-strategy ─┬─ mj-sim ── mj-tuner
                                      │                                  └─ mj-review
+                                     ├──────── mj-paifu（牌譜匯入；mj-sim 使用）
                                      └──────── mj-mjai
 mj-cli / app(Tauri) ── 以上全部
 ```
@@ -27,10 +28,11 @@ mj-cli / app(Tauri) ── 以上全部
 | `mj-tools` | 策略編輯者的純計算工具箱：手牌、動作後評估、看得到的牌、安全度事實（現物、筋、No Chance）、役的路線、點數、寶牌、牌桌 | M2.5 ✅ |
 | `mj-strategy` | `src/strategy-list/` 策略（main.rs、memory.rs、decision/、utils/predict/）；`framework/` 把引擎詢問拆成決策、記錄理由與預測；`build.rs` 自動產生模組；`TOOLS.md` 工具手冊 | M2.5 ✅ / M4+ 策略內容 |
 | `mj-sim` | 參考機器人（`RandomBot`、`GreedyBot`）；`replay` 牌譜重播；`predict_eval` 預測準確度；`counterfactual` 反事實決策評估；`duplicate` 對戰 | M3 ✅ |
+| `mj-paifu` | 牌譜匯入：天鳳 mjlog XML／JSON → 共通的 `GameRecord` → 還原牌山、照牌譜出牌讓引擎重播並比對點數 → 完整事件紀錄與每個決策點的 `PlayerView`（`DecisionPoint`）；策略可「旁觀」真人對局做預測 | M4 ✅ |
 | `mj-tuner` | 可調參數的自動調整（預測以準確度擬合、決策以反事實期望值） | M8 |
-| `mj-review` | 天鳳／mjai 牌譜匯入（M4）；逐手比對使用者與策略的選擇，附理由與反事實期望值（M7） | M4 / M7 |
+| `mj-review` | 逐手比對使用者與策略的選擇，附理由與反事實期望值（牌譜由 `mj-paifu` 匯入） | M7 |
 | `mj-mjai` | mjai bridge，與外部強 AI 對戰與比對 | M8 |
-| `mj-cli` | 執行檔 `mj`：`strategies`、`nanikiru`、`selfplay`、`predict-eval`、`evaluate`、`simulate`、`review`、`play`、`serve` | 持續 |
+| `mj-cli` | 執行檔 `mj`：`strategies`、`nanikiru`、`selfplay`、`import`、`predict-eval`、`evaluate`、`simulate`、`review`、`play`、`serve` | 持續 |
 
 ## 關鍵設計
 
@@ -43,6 +45,19 @@ mj-cli / app(Tauri) ── 以上全部
 
 ### 可重現性
 牌山由 seed 決定，策略是決定性的程式，所以任何一局都可以用（seed, 策略）重播。反事實評估正是利用這點：重播到決策點、強制改選另一個選項，再繼續打。
+
+### 牌譜匯入（M4）
+外部牌譜不直接轉成事件紀錄，而是**讓引擎重新打一次**：
+1. 解析成與格式無關的 `GameRecord`：每局的配牌、依時間排序的摸牌與動作（`Step`）、寶牌指示牌、原牌譜的點數。
+   天鳳 JSON 把每家的摸牌與打牌分開記錄，解析時要模擬輪轉排出時間順序（打牌後若有一家下一個摸牌欄是「鳴這張牌」就輪到他）。
+2. 由配牌與摸牌順序還原每局的牌山（`build_wall`），設定為 `GameConfig.preset_walls`。
+3. 四家都是 `ScriptedPlayer`，共用一個牌譜進度：自己回合執行牌譜的下一個動作；回應時若緊接著的回應動作（吃碰槓、榮和）中有自己的就執行，否則跳過。
+4. 比對每局開始的局數、本場、供託、點數，每局結束與終局點數。
+
+這樣做的好處：
+- 引擎檢查每個動作是否合法，並自己算役、點數、流局與終局，所以匯入成功就代表牌譜與引擎的規則完全一致；
+- 得到的是一般的 `GameResult`，重播（`replay`）、預測判定、快照與反事實模擬都可以直接使用；
+- 策略可以掛在 `ScriptedPlayer` 上「旁觀」：收到同樣的事件與詢問、做出預測，但動作照牌譜，用來評估對真人的讀牌準確度。
 
 ### UI 與核心的介面
 UI 只透過一層 API（`new_game`、`act`、`get_view`、`analyze`）和核心溝通：
@@ -62,6 +77,7 @@ Tauri 打包要在目標平台或 CI 上進行（GitHub Actions 三平台 matrix
 | 點數 | **差異測試**：隨機產生 20 萬手和牌（含副露、槓、赤寶牌、各種狀況役），與獨立實作的 Python [`mahjong`](https://pypi.org/project/mahjong/) 函式庫比對翻、符、點數 | `crates/mj-rules/examples/gen_wins.rs`、`tools/oracle/check_scoring.py` |
 | 規則情境 | 指定牌山與腳本玩家，逐條驗證振聽、雙響、食替、流局罰符、天和、雙立直一發、包牌、搶槓、立直振聽、四風連打 | `crates/mj-engine/tests/scenarios.rs` |
 | 終局條件 | 純函式 `match_over` 的單元測試（南四、西入、和了止め、擊飛） | `crates/mj-engine/src/game.rs` |
+| 實戰牌譜 | 天鳳鳳凰卓牌譜照牌譜重播，每局開始與結束的點數、終局點數都必須與原牌譜一致（等於用真實對局驗證整個引擎）；同一場的 XML 與 JSON 解析結果必須相同 | `crates/mj-paifu/tests/tenhou.rs`、`mj import` |
 | 模糊測試 | `fuzz` profile（release 速度＋debug assertions）下大量自我對戰，每回合檢查**牌數守恆**與**點數守恆** | `mj selfplay`（`cargo build --profile fuzz`） |
 
 執行差異測試：

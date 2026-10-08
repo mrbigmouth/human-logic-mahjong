@@ -15,6 +15,7 @@ mj-review.workspace = true
 clap.workspace = true
 mj-engine.workspace = true
 mj-rules.workspace = true
+mj-paifu.workspace = true
 rayon.workspace = true
 serde_json.workspace = true
 mj-calc.workspace = true

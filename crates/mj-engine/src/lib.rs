@@ -18,7 +18,7 @@ pub use game::{
 };
 pub use kyoku::EngineError;
 pub use snapshot::{DeterminizeReport, Snapshot};
-pub use wall::{Wall, full_set, hand_seed};
+pub use wall::{LIVE_WALL, WALL_SIZE, Wall, full_set, hand_seed};
 
 use mj_core::{Meld, Pai, Tile, TileCounts};
 use serde::{Deserialize, Serialize};
