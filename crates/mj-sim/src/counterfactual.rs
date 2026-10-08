@@ -394,7 +394,7 @@ mod tests {
     use super::*;
 
     fn strategy() -> Arc<dyn Strategy> {
-        Arc::from(mj_strategy::find_strategy("tenhou-normal-4p-hanchan").unwrap())
+        Arc::from(mj_strategy::find_strategy("tenhou-normal-4p-hanchan/push-fold").unwrap())
     }
 
     /// 冒煙測試：抽樣的決策點都能從快照重打，每個選項都有期望值。

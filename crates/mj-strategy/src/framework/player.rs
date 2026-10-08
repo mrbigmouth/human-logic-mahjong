@@ -334,12 +334,24 @@ impl<M: Default + Send> Player for BookPlayer<M> {
     }
 }
 
-/// 可以上桌的策略（由 `strategy-list` 中的每個策略目錄自動產生）。
+/// 可以上桌的策略（由 `strategy-list/<規則>/<策略>/` 的每個策略目錄自動產生）。
 pub trait Strategy: Send + Sync {
-    /// 目錄名稱，例如 `tenhou-normal-4p-hanchan`
+    /// 完整名稱「規則／策略」，例如 `tenhou-normal-4p-hanchan/push-fold`
     fn name(&self) -> &str;
-    /// 策略說明
-    fn description(&self) -> &str;
+    /// 規則名稱（`strategy-list` 下第一層目錄），例如 `tenhou-normal-4p-hanchan`
+    fn rule(&self) -> &str {
+        self.name().split('/').next().unwrap_or_default()
+    }
+    /// 策略說明文件（策略目錄的 `README.md` 全文，Markdown）
+    fn readme(&self) -> &str;
+    /// 標題（README 第一行的 `# 標題`）
+    fn title(&self) -> &str {
+        readme_title(self.readme())
+    }
+    /// 一段話的摘要（README 標題後的第一段），供選單、`mj strategies` 顯示
+    fn summary(&self) -> &str {
+        readme_summary(self.readme())
+    }
     /// 建立一個玩家。`record` = 是否保留決策紀錄；`force` = 強制指定某次決策的選項。
     fn player(&self, record: bool, force: Option<Force>) -> Box<dyn StrategyPlayer>;
 }
@@ -380,9 +392,29 @@ impl<M: Default + Clone + Send + 'static> StrategyPlayer for BookPlayer<M> {
     }
 }
 
+/// README 的標題：第一個 `# ` 開頭的行。
+fn readme_title(readme: &str) -> &str {
+    readme
+        .lines()
+        .find_map(|l| l.strip_prefix("# "))
+        .unwrap_or_default()
+        .trim()
+}
+
+/// README 的摘要：標題之後的第一段（到空行為止）。
+fn readme_summary(readme: &str) -> &str {
+    let after_title = match readme.find("# ") {
+        Some(i) => readme[i..].split_once('\n').map_or("", |(_, rest)| rest),
+        None => readme,
+    }
+    .trim_start();
+    after_title.split("\n\n").next().unwrap_or_default().trim()
+}
+
 /// 由策略手冊建立的策略。
 pub struct BookStrategy<M> {
     name: String,
+    readme: &'static str,
     book: Arc<Book<M>>,
 }
 
@@ -391,8 +423,8 @@ impl<M: Default + Clone + Send + 'static> Strategy for BookStrategy<M> {
         &self.name
     }
 
-    fn description(&self) -> &str {
-        &self.book.description
+    fn readme(&self) -> &str {
+        self.readme
     }
 
     fn player(&self, record: bool, force: Option<Force>) -> Box<dyn StrategyPlayer> {
@@ -401,8 +433,10 @@ impl<M: Default + Clone + Send + 'static> Strategy for BookStrategy<M> {
 }
 
 /// 用策略的 `register` 函式建立策略（由自動產生的程式碼呼叫）。
+/// `name` = 「規則／策略」，`readme` = 策略目錄的 `README.md`。
 pub fn book_strategy<M: Default + Clone + Send + 'static>(
     name: &str,
+    readme: &'static str,
     register: fn(&mut Book<M>),
 ) -> Box<dyn Strategy> {
     let mut book = Book::default();
@@ -413,6 +447,7 @@ pub fn book_strategy<M: Default + Clone + Send + 'static>(
     );
     Box::new(BookStrategy {
         name: name.to_string(),
+        readme,
         book: Arc::new(book),
     })
 }
@@ -582,5 +617,13 @@ mod tests {
         let mut quiet = BookPlayer::new(b, false, None);
         quiet.act(&view(hand), &legal(hand));
         assert_eq!(quiet.mem, 0);
+    }
+
+    #[test]
+    fn readme_title_and_summary() {
+        let readme = "# 押引\n\n第一段\n第二行\n\n## 特色\n- x\n";
+        assert_eq!(readme_title(readme), "押引");
+        assert_eq!(readme_summary(readme), "第一段\n第二行");
+        assert_eq!(readme_summary("# 只有標題\n"), "");
     }
 }

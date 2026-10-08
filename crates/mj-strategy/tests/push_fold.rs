@@ -1,16 +1,16 @@
-//! 策略 tenhou-normal-4p-hanchan 的測試：各決策的判斷，以及完整對局的合法性。
+//! 策略 tenhou-normal-4p-hanchan/push-fold 的測試：各決策的判斷，以及完整對局的合法性。
 
 use mj_core::{Pai, Tile, TileCounts, parse_pais};
 use mj_engine::{DiscardRecord, GameConfig, Player, PlayerView, run_game};
 use mj_rules::riichi::RiichiConfig;
 use mj_strategy::framework::{CallChoice, Ctx, DecisionKind};
-use mj_strategy::strategy_list::tenhou_normal_4p_hanchan::{decision, memory::Memory};
+use mj_strategy::strategy_list::tenhou_normal_4p_hanchan::push_fold::{decision, memory::Memory};
 use mj_strategy::{all_strategies, find_strategy};
 use rand::SeedableRng;
 use rand::seq::SliceRandom;
 use rand_chacha::ChaCha8Rng;
 
-const NAME: &str = "tenhou-normal-4p-hanchan";
+const NAME: &str = "tenhou-normal-4p-hanchan/push-fold";
 
 fn view(hand: &str) -> PlayerView {
     let pais = parse_pais(hand).unwrap();
@@ -51,7 +51,19 @@ fn p(s: &str) -> Pai {
 /// build.rs 自動產生的策略清單包含這個策略。
 #[test]
 fn strategy_is_registered() {
-    assert!(all_strategies().iter().any(|s| s.name() == NAME));
+    let st = all_strategies()
+        .into_iter()
+        .find(|s| s.name() == NAME)
+        .unwrap();
+    assert_eq!(st.rule(), "tenhou-normal-4p-hanchan");
+    // 每個策略都要有說明文件（GUI 選策略時顯示）
+    for s in all_strategies() {
+        assert!(
+            !s.title().is_empty() && !s.summary().is_empty(),
+            "{} 缺少說明",
+            s.name()
+        );
+    }
 }
 
 /// 何切一致性：沒有寶牌、沒人立直時，選的打法必須符合牌理定義（向聽最低、其中進張最多）。
@@ -96,7 +108,11 @@ fn folds_against_riichi() {
     let ctx = Ctx::new(&v, DecisionKind::Discard).with_discards(distinct(&v));
     let chosen = decision::discard::decide(&ctx, &mut Memory::default());
     assert_eq!(chosen, p("9s"));
-    assert!(ctx.notes()[0].contains("棄和"));
+    assert!(
+        ctx.notes().iter().any(|n| n.starts_with("棄和")),
+        "{:?}",
+        ctx.notes()
+    );
 }
 
 /// 聽牌張只剩 1 張時默聽；4 張時立直。
@@ -178,7 +194,7 @@ fn records_are_valid() {
 
 mod tsumogiri_memory {
     use mj_engine::Event;
-    use mj_strategy::strategy_list::tenhou_normal_4p_hanchan::memory::{
+    use mj_strategy::strategy_list::tenhou_normal_4p_hanchan::push_fold::memory::{
         Memory, WATCH_FROM_TURN, observe,
     };
 

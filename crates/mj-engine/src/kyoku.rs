@@ -73,14 +73,16 @@ pub(crate) enum Resume {
         rinshan: bool,
         after_call: bool,
     },
-    /// 他家打牌後的回應階段，從第 `k` 個回應者（1 = 下家）開始；
-    /// `rons`、`call`、`chi` 是在他之前的回應者已經做出的選擇。
+    /// 他家打牌後的回應階段。快照時正要詢問第 `k` 個回應者（1 = 下家），繼續時從第 `start` 個開始問；
+    /// `rons`、`call`、`chi` 是在 `start` 之前的回應者已經做出的選擇。
+    /// 通常 `start == k`；重抽手牌後 `start = 1`（之前的回應者依新的手牌重新回答）。
     Response {
         discarder: Seat,
         pai: Pai,
         riichi: bool,
         double: bool,
         k: u8,
+        start: u8,
         rons: Vec<Seat>,
         call: Option<(Seat, Action)>,
         chi: Option<(Seat, Action)>,
@@ -421,7 +423,8 @@ impl<'a, 'p> Kyoku<'a, 'p> {
                 pai,
                 riichi,
                 double,
-                k: start,
+                start,
+                k: _,
                 rons,
                 call,
                 chi,
@@ -917,6 +920,7 @@ impl<'a, 'p> Kyoku<'a, 'p> {
                         riichi,
                         double,
                         k,
+                        start: k,
                         rons,
                         call,
                         chi,

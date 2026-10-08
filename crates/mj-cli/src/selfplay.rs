@@ -33,7 +33,7 @@ pub(crate) struct Seat {
     spec: SeatSpec,
 }
 
-/// 解析一個參賽者：`greedy`、`random` 或策略名稱（strategy-list 下的目錄名）。
+/// 解析一個參賽者：`greedy`、`random` 或策略名稱「規則／策略」。
 pub(crate) fn parse_entrant(s: &str) -> Result<Seat, String> {
     match s.trim() {
         "greedy" => Ok(Seat {

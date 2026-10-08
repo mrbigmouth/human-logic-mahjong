@@ -19,7 +19,6 @@ pub type Observe<M> = fn(Seat, &Event, &mut M);
 
 /// 策略手冊。`M` = 這個策略的對局記憶型別（`memory.rs` 的 `Memory`）。
 pub struct Book<M> {
-    pub(crate) description: String,
     pub(crate) kyuushu: Option<DecideBool<M>>,
     pub(crate) win: Option<DecideBool<M>>,
     pub(crate) kan: Option<DecideKan<M>>,
@@ -36,7 +35,6 @@ pub type PredictEachTurn<M> = fn(&Ctx, &mut M);
 impl<M> Default for Book<M> {
     fn default() -> Self {
         Book {
-            description: String::new(),
             kyuushu: None,
             win: None,
             kan: None,
@@ -50,11 +48,6 @@ impl<M> Default for Book<M> {
 }
 
 impl<M> Book<M> {
-    /// 策略說明（顯示在 `mj strategies`）。
-    pub fn describe(&mut self, text: &str) {
-        self.description = text.to_string();
-    }
-
     /// 九種九牌時呼叫：回傳 true = 流局重來。沒有登記時一律不流局。
     pub fn kyuushu(&mut self, f: DecideBool<M>) {
         self.kyuushu = Some(f);

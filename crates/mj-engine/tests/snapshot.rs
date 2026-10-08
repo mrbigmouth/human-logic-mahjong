@@ -112,3 +112,47 @@ fn determinize_changes_hidden_tiles() {
         serde_json::to_string(&rb.log).unwrap()
     );
 }
+
+/// 能吃就吃、但不碰的玩家（其餘同 `Simple`）：讓回應階段中常有「下家已決定吃、接著詢問對家要不要碰」，
+/// 而對家不碰，所以下家的吃會真的執行。
+#[derive(Clone, Default)]
+struct Caller;
+
+impl Player for Caller {
+    fn act(&mut self, view: &PlayerView, legal: &[Action]) -> Action {
+        if let Some(a) = legal.iter().find(|a| matches!(a, Action::Chi { .. })) {
+            return a.clone();
+        }
+        Simple.act(view, legal)
+    }
+}
+
+/// 在回應階段保存的快照：之前的回應者已依真實手牌決定吃牌，重抽後要依新手牌重新詢問，
+/// 不能沿用舊的決定（否則會用到已經不在手上的牌）。
+#[test]
+fn determinize_reasks_earlier_responders() {
+    let mut checked = 0;
+    for seed in 0..12 {
+        for seat in 0..4 {
+            for ask in (0..80).step_by(3) {
+                let mut ps: [Caller; 4] = Default::default();
+                let refs = ps.each_mut().map(|p| p as &mut dyn Player);
+                let Some(snap) = capture_snapshot(&cfg(seed), refs, seat, ask).unwrap() else {
+                    continue;
+                };
+                if snap.view().last_discard.is_none() {
+                    continue;
+                }
+                for r in 0..3 {
+                    let mut s = snap.clone();
+                    s.determinize(&mut ChaCha8Rng::seed_from_u64(r));
+                    let mut ps: [Caller; 4] = Default::default();
+                    let refs = ps.each_mut().map(|p| p as &mut dyn Player);
+                    resume_game(&cfg(seed), &s, refs, false, Until::HandEnd).expect("plays on");
+                    checked += 1;
+                }
+            }
+        }
+    }
+    assert!(checked > 100, "only {checked} response snapshots");
+}

@@ -1,11 +1,16 @@
 //! 掃描 src/strategy-list/，自動產生模組宣告與策略清單，讓策略編輯者新增檔案時不必寫 `mod`。
 //!
-//! 目錄或檔名中的 `-` 會轉成 `_`（Rust 模組名稱不能有 `-`），例如
-//! `strategy-list/tenhou-normal-4p-hanchan/decision/discard.rs` →
-//! `crate::strategy_list::tenhou_normal_4p_hanchan::decision::discard`。
+//! 目錄結構是 `strategy-list/<規則>/<策略>/`：第一層是規則（例如 `tenhou-normal-4p-hanchan`），
+//! 第二層是同一套規則下的各個策略。策略的完整名稱是「規則／策略」。
 //!
-//! 每個策略目錄必須有 `main.rs`（`pub fn register(book: &mut Book<Memory>)`）
-//! 與 `memory.rs`（`pub struct Memory`，需實作 `Default` 與 `Clone`）。
+//! 目錄或檔名中的 `-` 會轉成 `_`（Rust 模組名稱不能有 `-`），例如
+//! `strategy-list/tenhou-normal-4p-hanchan/push-fold/decision/discard.rs` →
+//! `crate::strategy_list::tenhou_normal_4p_hanchan::push_fold::decision::discard`。
+//!
+//! 每個規則目錄必須有 `README.md`（規則說明）；每個策略目錄必須有
+//! - `README.md`：策略說明（第一行 `# 標題`，接著一段摘要，之後是詳細特色），GUI 選策略時顯示；
+//! - `main.rs`：`pub fn register(book: &mut Book<Memory>)`；
+//! - `memory.rs`：`pub struct Memory`，需實作 `Default` 與 `Clone`。
 
 use std::fmt::Write;
 use std::fs;
@@ -60,26 +65,53 @@ fn main() {
         "/// 自動產生：src/strategy-list/ 的模組樹。\n#[allow(clippy::module_inception)]\npub mod strategy_list {\n",
     );
     let mut strategies = Vec::new();
-    for dir in sorted_entries(&root).into_iter().filter(|p| p.is_dir()) {
-        let name = dir.file_name().unwrap().to_string_lossy().to_string();
-        for required in ["main.rs", "memory.rs"] {
-            assert!(dir.join(required).exists(), "策略 {name} 缺少 {required}");
+    let mut rules = Vec::new();
+    for rule_dir in sorted_entries(&root).into_iter().filter(|p| p.is_dir()) {
+        let rule = rule_dir.file_name().unwrap().to_string_lossy().to_string();
+        assert!(
+            rule_dir.join("README.md").exists(),
+            "規則目錄 {rule} 缺少 README.md（規則說明）"
+        );
+        println!("cargo:rerun-if-changed={}", rule_dir.display());
+        rules.push((rule.clone(), rule_dir.join("README.md")));
+        writeln!(out, "    pub mod {} {{", ident(&rule)).unwrap();
+        for dir in sorted_entries(&rule_dir).into_iter().filter(|p| p.is_dir()) {
+            let name = dir.file_name().unwrap().to_string_lossy().to_string();
+            for required in ["README.md", "main.rs", "memory.rs"] {
+                assert!(
+                    dir.join(required).exists(),
+                    "策略 {rule}/{name} 缺少 {required}"
+                );
+            }
+            let readme = fs::read_to_string(dir.join("README.md")).unwrap();
+            assert!(
+                readme.starts_with("# "),
+                "策略 {rule}/{name} 的 README.md 第一行必須是「# 標題」"
+            );
+            // 每個檔案與目錄都要讓 cargo 監看，新增檔案時才會重新產生。
+            watch(&dir);
+            writeln!(out, "        pub mod {} {{", ident(&name)).unwrap();
+            emit_dir(&mut out, &dir, 3);
+            writeln!(out, "        }}").unwrap();
+            strategies.push((rule.clone(), name, dir.join("README.md")));
         }
-        // 每個檔案與目錄都要讓 cargo 監看，新增檔案時才會重新產生。
-        watch(&dir);
-        writeln!(out, "    pub mod {} {{", ident(&name)).unwrap();
-        emit_dir(&mut out, &dir, 2);
         writeln!(out, "    }}").unwrap();
-        strategies.push(name);
     }
     out.push_str("}\n\n/// 自動產生：所有策略。\npub fn all_strategies() -> Vec<Box<dyn crate::framework::Strategy>> {\n    vec![\n");
-    for name in &strategies {
-        let m = ident(name);
+    for (rule, name, readme) in &strategies {
+        let m = format!("strategy_list::{}::{}", ident(rule), ident(name));
+        let full = format!("{rule}/{name}");
+        let readme = readme.display().to_string();
         writeln!(
             out,
-            "        crate::framework::book_strategy::<strategy_list::{m}::memory::Memory>({name:?}, strategy_list::{m}::main::register),"
+            "        crate::framework::book_strategy::<{m}::memory::Memory>({full:?}, include_str!({readme:?}), {m}::main::register),"
         )
         .unwrap();
+    }
+    out.push_str("    ]\n}\n\n/// 自動產生：所有規則（名稱, README.md 全文）。\npub fn all_rules() -> Vec<(&'static str, &'static str)> {\n    vec![\n");
+    for (rule, readme) in &rules {
+        let readme = readme.display().to_string();
+        writeln!(out, "        ({rule:?}, include_str!({readme:?})),").unwrap();
     }
     out.push_str("    ]\n}\n");
     let dest = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("strategy_list.rs");

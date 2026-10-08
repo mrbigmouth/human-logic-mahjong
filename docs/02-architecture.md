@@ -26,7 +26,7 @@ mj-cli / app(Tauri) ── 以上全部
 | `mj-rules` | `RuleSet` trait；`riichi`：全部役種與役滿、符、點數、`RiichiConfig` 規則選項（預設天鳳規則） | M1 ✅ |
 | `mj-engine` | 對局狀態機（`run_game`）、`Action`、`PlayerView`、`Player` trait、seed 牌山、事件流；局面快照、重抽看不到的牌、從快照繼續（M3） | M1 ✅ / M3 ✅ |
 | `mj-tools` | 策略編輯者的純計算工具箱：手牌、動作後評估、看得到的牌、安全度事實（現物、筋、No Chance）、役的路線、點數、寶牌、牌桌 | M2.5 ✅ |
-| `mj-strategy` | `src/strategy-list/` 策略（main.rs、memory.rs、decision/、utils/predict/）；`framework/` 把引擎詢問拆成決策、記錄理由與預測；`build.rs` 自動產生模組；`TOOLS.md` 工具手冊 | M2.5 ✅ / M4+ 策略內容 |
+| `mj-strategy` | `src/strategy-list/<規則>/<策略>/` 策略（README.md、main.rs、memory.rs、decision/、utils/predict/）；`framework/` 把引擎詢問拆成決策、記錄理由與預測；`build.rs` 自動產生模組；`TOOLS.md` 工具手冊 | M2.5 ✅ / M4+ 策略內容 |
 | `mj-sim` | 參考機器人（`RandomBot`、`GreedyBot`）；`replay` 牌譜重播；`predict_eval` 預測準確度；`counterfactual` 反事實決策評估；`duplicate` 對戰 | M3 ✅ |
 | `mj-paifu` | 牌譜匯入：天鳳 mjlog XML／JSON → 共通的 `GameRecord` → 還原牌山、照牌譜出牌讓引擎重播並比對點數 → 完整事件紀錄與每個決策點的 `PlayerView`（`DecisionPoint`）；策略可「旁觀」真人對局做預測 | M4 ✅ |
 | `mj-tuner` | 可調參數的自動調整（預測以準確度擬合、決策以反事實期望值） | M8 |

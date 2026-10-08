@@ -17,20 +17,35 @@ use crate::prelude::*;
 
 ```
 src/strategy-list/
-  tenhou-normal-4p-hanchan/      ← 一個策略（以規則命名）
-    main.rs                      ← 登記：什麼情況呼叫哪一個決策
-    memory.rs                    ← 對局記憶 `Memory`（整場共用）＋ observe（看事件更新記憶）
-    decision/                    ← 每個檔案匯出一個 `decide` 函式
-      kyuushu.rs  win.rs  kan.rs  discard.rs  riichi.rs  call.rs
-    utils/                       ← 決策共用的輔助判斷
-      efficiency.rs  defense.rs
-      predict/                   ← 預測函式（會被全知視角評分，見第 5 節）
-        tenpai.rs  waits.rs
+  tenhou-normal-4p-hanchan/      ← 規則（天鳳一般規則・四人半莊）
+    README.md                    ← 規則說明與這個規則下的策略一覽
+    push-fold/                   ← 一個策略（名稱表示特色；特色太複雜時也可以用編號代號）
+      README.md                  ← 策略說明（GUI 選策略時顯示，見下方格式）
+      main.rs                    ← 登記：什麼情況呼叫哪一個決策
+      memory.rs                  ← 對局記憶 `Memory`（整場共用）＋ observe（看事件更新記憶）
+      decision/                  ← 每個檔案匯出一個 `decide` 函式
+        kyuushu.rs  win.rs  kan.rs  discard.rs  riichi.rs  call.rs
+      utils/                     ← 決策共用的輔助判斷
+        efficiency.rs  defense.rs  value.rs
+        predict/                 ← 預測函式（會被全知視角評分，見第 5 節）
+          tenpai.rs  waits.rs  win.rs
+    efficiency-fold/             ← 同一規則下的另一個策略
+      ...
 ```
 
-- 新增檔案或子目錄**不需要寫 `mod` 宣告**，建置時會自動產生。檔名或目錄名中的 `-` 在程式中變成 `_`。
+- 第一層目錄是**規則**，第二層是同一套規則下的各個**策略**。策略的完整名稱是「規則／策略」，
+  例如 `tenhou-normal-4p-hanchan/push-fold`，`mj` 的各個指令都用這個名稱。
+- 每個策略都**必須有 `README.md`**（建置時檢查），格式：
+  1. 第一行 `# 標題`（短名稱）；
+  2. 接著一段摘要（一段話說明主要特色），`mj strategies` 與 GUI 的策略選單顯示這一段；
+  3. 之後自由撰寫：特色、強度、已知弱點、主要參數……（`mj strategies <名稱>` 顯示全文）。
+  修改策略的打法時，記得同步更新 README。
+- 新增檔案或子目錄**不需要寫 `mod` 宣告**，建置時會自動產生。檔名或目錄名中的 `-` 在程式中變成 `_`
+  （例如 `strategy_list::tenhou_normal_4p_hanchan::push_fold::decision::discard`）。
 - 同一個策略內互相引用：`decision/` 裡的檔案用 `super::super::utils::xxx`、`super::super::memory::Memory`。
-- 新增一個策略：複製一份現有的策略目錄改名即可，`mj strategies` 會自動列出。
+- 新增一個策略：在規則目錄下複製一份現有的策略目錄、改名並改寫 README，`mj strategies` 會自動列出。
+  修改策略前也可以先複製一份舊版本當作比較基準（例如 `efficiency-fold` 是 M4 時凍結的版本），
+  再用 `mj simulate 新版 舊版` 確認改動是否真的變強。
 
 ## 2. 決策函式
 
@@ -114,6 +129,8 @@ src/strategy-list/
 |---|---|
 | `win_value(view, &hand, win_tile, tsumo, assume_riichi) -> Option<Score>` | 目前手牌以某張和牌值多少（`.han` 番、`.fu` 符、`.yaku` 役） |
 | `ron_points(view, &score) -> i32` | 榮和時對方付的點數 |
+| `tenpai_value(view, &hand, assume_riichi) -> Option<TenpaiValue>` | 聽牌手牌（3k+1 張）的聽牌張數 `.waits`、有役能榮和的張數 `.ron_waits`、依剩餘張數加權的平均榮和點數 `.avg_ron` |
+| `points_for_han(han, dealer) -> i32` | 依番數粗估榮和點數（30 符；滿貫以上照規定），還沒聽牌時估價用 |
 | `score(&concealed, &melds, &WinContext, &RiichiConfig)` | 完整的計分函式（任意條件） |
 
 ### `tools::dora` 寶牌
@@ -162,7 +179,7 @@ pub fn predict(ctx: &Ctx, seat: Seat) -> f64 {
 評估指令：
 
 ```sh
-mj predict-eval --strategy tenhou-normal-4p-hanchan --games 300
+mj predict-eval --strategy tenhou-normal-4p-hanchan/push-fold --games 300
 ```
 
 輸出各預測函式的 Brier 分數、技巧分數（相對於永遠猜平均值）、對數損失與校準表。
@@ -174,8 +191,8 @@ mj predict-eval --strategy tenhou-normal-4p-hanchan --games 300
 改選每個選項重打多次，比較各選項的期望結果，算出實際選擇的「損失」。
 
 ```sh
-mj evaluate --strategy tenhou-normal-4p-hanchan --games 20                   # 名次點（打到整場結束）
-mj evaluate --strategy tenhou-normal-4p-hanchan --games 20 --metric points   # 這一局的點數（較快、雜訊小）
+mj evaluate --strategy tenhou-normal-4p-hanchan/push-fold --games 20                   # 名次點（打到整場結束）
+mj evaluate --strategy tenhou-normal-4p-hanchan/push-fold --games 20 --metric points   # 這一局的點數（較快、雜訊小）
 mj evaluate ... --kinds discard,call --json result.json                      # 只評估某些決策、輸出 JSON
 ```
 
@@ -203,5 +220,5 @@ mj simulate 策略A 策略B --blocks 1000
 但人類不會全部記住；把「人類會記的事」寫在 `observe` 裡，預測讀記憶，策略的思路才是人類做得到的。
 需要完整紀錄（例如復盤時指出「其實可以注意到」）才直接讀 `ctx.view`。
 
-範例（`tenhou-normal-4p-hanchan`）：`tsumogiri_streak` 從中巡（`WATCH_FROM_TURN = 6`）起記錄各家連續摸切次數，
+範例（`tenhou-normal-4p-hanchan/push-fold`）：`tsumogiri_streak` 從中巡（`WATCH_FROM_TURN = 6`）起記錄各家連續摸切次數，
 手切或鳴牌歸 0；`predict::tenpai` 依此提高副露者的聽牌機率。

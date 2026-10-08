@@ -149,6 +149,21 @@ impl Snapshot {
         for (slot, pai) in wall_slots.into_iter().zip(pool) {
             tiles[slot] = pai;
         }
+        // 回應階段中、在決策者之前已經回答的對手，是依原本（真實）的手牌決定的：
+        // 手牌重抽後要從頭重新詢問，否則他們的吃碰會用到已經不在手上的牌（也等於洩漏了他們的決定）。
+        if let Resume::Response {
+            start,
+            rons,
+            call,
+            chi,
+            ..
+        } = &mut self.resume
+        {
+            *start = 1;
+            rons.clear();
+            *call = None;
+            *chi = None;
+        }
         report
     }
 }

@@ -36,7 +36,8 @@ cargo run -p mj-cli -- strategies                      # 列出所有策略
 cargo run -p mj-cli -- nanikiru 23m456p789s11z224s9m --dora 1s
 
 cargo build --release -p mj-cli
-S=tenhou-normal-4p-hanchan
+S=tenhou-normal-4p-hanchan/push-fold
+./target/release/mj strategies                                             # 策略一覽（加名稱顯示完整說明）
 ./target/release/mj selfplay --games 2000 --seats $S,greedy,greedy,random   # 對戰成績
 ./target/release/mj predict-eval --strategy $S --games 300                 # 預測準確度
 ./target/release/mj evaluate --strategy $S --games 20                      # 決策品質（反事實模擬）

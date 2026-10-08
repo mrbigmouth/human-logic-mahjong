@@ -22,8 +22,11 @@ struct Cli {
 /// 子命令。註解同時是 `mj --help` 顯示的說明文字。
 #[derive(Subcommand)]
 enum Command {
-    /// 列出所有策略（src/strategy-list/ 下的目錄）
-    Strategies,
+    /// 列出所有策略（src/strategy-list/<規則>/<策略>/）與摘要；指定名稱時顯示該策略的完整說明
+    Strategies {
+        /// 策略名稱「規則／策略」，例如 tenhou-normal-4p-hanchan/push-fold
+        name: Option<String>,
+    },
     /// 何切分析：列出一手 14 張牌每種打法的分數與理由
     Nanikiru {
         /// 手牌 14 張（最後一張視為剛摸到的牌），例如 123m406p789s1122z5z
@@ -32,7 +35,7 @@ enum Command {
         #[arg(long, default_value = "")]
         dora: String,
         /// 策略名稱
-        #[arg(long, default_value = "tenhou-normal-4p-hanchan")]
+        #[arg(long, default_value = "tenhou-normal-4p-hanchan/push-fold")]
         strategy: String,
     },
     /// 機器人或策略自我對戰並輸出統計（兼引擎模糊測試）
@@ -69,7 +72,7 @@ enum Command {
     /// 輸出各預測函式的準確度
     PredictEval {
         /// 策略名稱（四家都用這個策略）
-        #[arg(long, default_value = "tenhou-normal-4p-hanchan")]
+        #[arg(long, default_value = "tenhou-normal-4p-hanchan/push-fold")]
         strategy: String,
         /// 改用這些牌譜（檔案或目錄）：策略旁觀真人對局並預測，不自我對戰
         #[arg(long, num_args = 1..)]
@@ -85,7 +88,7 @@ enum Command {
     /// 依決策種類統計「平均損失點數」
     Evaluate {
         /// 策略名稱（四家都用這個策略）
-        #[arg(long, default_value = "tenhou-normal-4p-hanchan")]
+        #[arg(long, default_value = "tenhou-normal-4p-hanchan/push-fold")]
         strategy: String,
         /// 對局（半莊）數
         #[arg(long, default_value_t = 20)]
@@ -144,9 +147,29 @@ enum Command {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let milestone = match cli.command {
-        Command::Strategies => {
-            for s in mj_strategy::all_strategies() {
-                println!("{}\n    {}", s.name(), s.description());
+        Command::Strategies { name } => {
+            if let Some(name) = name {
+                let Some(s) = mj_strategy::find_strategy(&name) else {
+                    eprintln!("找不到策略 {name}");
+                    return ExitCode::FAILURE;
+                };
+                println!("{}", s.readme());
+                return ExitCode::SUCCESS;
+            }
+            let strategies = mj_strategy::all_strategies();
+            for (rule, readme) in mj_strategy::all_rules() {
+                let title = readme
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .trim_start_matches("# ");
+                println!("{rule}（{title}）");
+                for s in strategies.iter().filter(|s| s.rule() == rule) {
+                    println!("  {}：{}", s.name(), s.title());
+                    for line in s.summary().lines() {
+                        println!("      {line}");
+                    }
+                }
             }
             return ExitCode::SUCCESS;
         }
