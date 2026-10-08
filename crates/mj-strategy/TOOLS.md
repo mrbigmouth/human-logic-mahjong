@@ -236,6 +236,14 @@ mj evaluate ... --kinds discard,call --json result.json                      # �
 mj simulate 策略A 策略B --blocks 1000
 ```
 
+和高手比較用牌譜復盤：策略旁觀天鳳鳳凰卓的對局，在玩家與策略選擇不同的地方用反事實模擬比較兩者，
+最後依差異類型（向聽倒退、進張較少、多鳴、漏鳴、默聽……）統計平均差值。
+某一類的平均差值顯著為負（「你較好」）時，代表高手在這類局面比策略好，是改進策略的線索。
+
+```sh
+mj review data/tenhou --strategy tenhou-normal-4p-hanchan/hand-reading --json review.json
+```
+
 ## 7. 對局記憶 `Memory`
 
 `memory.rs` 定義 `pub struct Memory`（需要 `Default` 與 `Clone`，通常寫 `#[derive(Default, Clone)]`），整場對局（半莊）中所有決策共用，

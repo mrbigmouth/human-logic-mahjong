@@ -48,6 +48,9 @@ tools/fetch-tenhou.sh 2026100700 2026100701 -n 20
 ./target/release/mj import data/tenhou
 ./target/release/mj predict-eval --strategy $S --logs data/tenhou
 
+# 復盤：逐手比較牌譜中某位玩家與策略的選擇（理由、反事實期望值、失誤統計）
+./target/release/mj review data/tenhou/<牌譜>.xml --player <名稱> --json review.json
+
 # fuzz 建置：每回合檢查牌數與點數守恆
 cargo build --profile fuzz -p mj-cli
 ./target/fuzz/mj selfplay --games 1 --dump game.jsonl  # 輸出完整事件紀錄
@@ -68,7 +71,7 @@ crates/
   mj-sim       參考機器人、牌譜重播、預測準確度評估、反事實決策評估、duplicate 對戰
   mj-tuner     （M8）可調參數的自動調整
   mj-paifu     牌譜匯入（天鳳 mjlog XML／JSON）：引擎重播、比對點數、重建每個決策點的視角
-  mj-review    （M7）復盤解說
+  mj-review    復盤：逐手比對玩家與策略、反事實評估、失誤統計（M7）
   mj-mjai      mjai 協定（和外部 AI 對戰）
   mj-cli       命令列工具 mj
 docs/          設計文件

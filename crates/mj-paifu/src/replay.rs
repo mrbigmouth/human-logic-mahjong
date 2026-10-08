@@ -3,8 +3,8 @@
 use crate::{GameRecord, HandRecord, Step};
 use mj_core::Pai;
 use mj_engine::{
-    Action, Event, GameConfig, GameResult, LIVE_WALL, Player, PlayerView, Seat, full_set,
-    run_game_with,
+    Action, Event, GameConfig, GameResult, LIVE_WALL, Player, PlayerView, Seat, Snapshot,
+    capture_snapshot, full_set, run_game_with,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -262,25 +262,7 @@ pub fn replay(
     record_points: bool,
 ) -> Result<Replayed, String> {
     let cfg = config(rec)?;
-    let acts: Vec<(usize, Seat, Action)> = rec
-        .hands
-        .iter()
-        .enumerate()
-        .flat_map(|(i, h)| {
-            h.steps.iter().filter_map(move |s| match s {
-                Step::Act { seat, action } => Some((i, *seat, action.clone())),
-                Step::Draw { .. } => None,
-            })
-        })
-        .collect();
-    let cursor = Rc::new(RefCell::new(Cursor {
-        used: vec![false; acts.len()],
-        acts,
-        pos: 0,
-        error: None,
-        record: record_points,
-        points: Vec::new(),
-    }));
+    let cursor = Rc::new(RefCell::new(Cursor::new(rec, record_points)));
     let mut players = shadows.map(|shadow| ScriptedPlayer {
         cursor: cursor.clone(),
         shadow,
@@ -310,6 +292,61 @@ pub fn replay(
         result,
         points: c.points,
     })
+}
+
+/// 照牌譜重播到「即將第 `ask_index` 次詢問 `seat`」時，保存局面快照（復盤的反事實評估用）。
+/// 旁觀者會收到快照點之前的所有事件與詢問，所以可以直接當作從快照繼續打的玩家。
+/// 回傳（重播設定, 快照）；快照點不支援（例如搶槓）時為 `None`。
+pub fn capture(
+    rec: &GameRecord,
+    shadows: [Option<&mut dyn Player>; 4],
+    seat: Seat,
+    ask_index: u32,
+) -> Result<Option<(GameConfig, Snapshot)>, String> {
+    let cfg = config(rec)?;
+    let cursor = Rc::new(RefCell::new(Cursor::new(rec, false)));
+    let mut players = shadows.map(|shadow| ScriptedPlayer {
+        cursor: cursor.clone(),
+        shadow,
+        events: 0,
+        asks: 0,
+    });
+    let refs = players.each_mut().map(|p| p as &mut dyn Player);
+    let snap = capture_snapshot(&cfg, refs, seat, ask_index);
+    drop(players);
+    let c = Rc::try_unwrap(cursor)
+        .ok()
+        .expect("players dropped")
+        .into_inner();
+    if let Some(e) = c.error {
+        return Err(e);
+    }
+    let snap = snap.map_err(|e| format!("引擎錯誤：{e}"))?;
+    Ok(snap.map(|s| (cfg, s)))
+}
+
+impl Cursor {
+    fn new(rec: &GameRecord, record: bool) -> Self {
+        let acts: Vec<(usize, Seat, Action)> = rec
+            .hands
+            .iter()
+            .enumerate()
+            .flat_map(|(i, h)| {
+                h.steps.iter().filter_map(move |s| match s {
+                    Step::Act { seat, action } => Some((i, *seat, action.clone())),
+                    Step::Draw { .. } => None,
+                })
+            })
+            .collect();
+        Cursor {
+            used: vec![false; acts.len()],
+            acts,
+            pos: 0,
+            error: None,
+            record,
+            points: Vec::new(),
+        }
+    }
 }
 
 /// 比對引擎的結果與原牌譜：每局開始的局數、本場、供託、點數，每局結束與終局的點數。

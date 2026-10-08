@@ -207,15 +207,7 @@ impl<M: Default> BookPlayer<M> {
                 return Action::Ron;
             }
         }
-        let mut calls = vec![CallChoice::Pass];
-        for a in legal {
-            match a {
-                Action::Chi { consumed } => calls.push(CallChoice::Chi(*consumed)),
-                Action::Pon { consumed } => calls.push(CallChoice::Pon(*consumed)),
-                Action::Daiminkan => calls.push(CallChoice::Daiminkan),
-                _ => {}
-            }
-        }
+        let calls = call_options(legal);
         if calls.len() == 1 {
             return Action::Pass;
         }
@@ -241,17 +233,9 @@ impl<M: Default> BookPlayer<M> {
                 return Action::Tsumo;
             }
         }
-        let kans: Vec<KanChoice> = legal
-            .iter()
-            .filter_map(|a| match a {
-                Action::Ankan { tile } => Some(KanChoice::Ankan(*tile)),
-                Action::Kakan { pai } => Some(KanChoice::Kakan(*pai)),
-                _ => None,
-            })
-            .collect();
+        let kans = kan_choices(legal);
         if !kans.is_empty() {
-            let mut options: Vec<Option<KanChoice>> = vec![None];
-            options.extend(kans.iter().copied().map(Some));
+            let options = kan_options(legal);
             let labels = options
                 .iter()
                 .map(|o| o.map_or("不槓".to_string(), |k| k.to_string()))
@@ -263,14 +247,7 @@ impl<M: Default> BookPlayer<M> {
             }
         }
 
-        let mut candidates: Vec<Pai> = Vec::new();
-        for a in legal {
-            if let Action::Discard { pai, .. } = a {
-                if !candidates.contains(pai) {
-                    candidates.push(*pai);
-                }
-            }
-        }
+        let candidates = discard_candidates(legal);
         let pai = if candidates.len() == 1 {
             candidates[0]
         } else {
@@ -298,6 +275,116 @@ impl<M: Default> BookPlayer<M> {
             }
         }
         Action::Discard { pai, tsumogiri }
+    }
+}
+
+/// 鳴牌決策的選項（第一個是不鳴）。
+fn call_options(legal: &[Action]) -> Vec<CallChoice> {
+    let mut calls = vec![CallChoice::Pass];
+    for a in legal {
+        match a {
+            Action::Chi { consumed } => calls.push(CallChoice::Chi(*consumed)),
+            Action::Pon { consumed } => calls.push(CallChoice::Pon(*consumed)),
+            Action::Daiminkan => calls.push(CallChoice::Daiminkan),
+            _ => {}
+        }
+    }
+    calls
+}
+
+/// 可以開的槓。
+fn kan_choices(legal: &[Action]) -> Vec<KanChoice> {
+    legal
+        .iter()
+        .filter_map(|a| match a {
+            Action::Ankan { tile } => Some(KanChoice::Ankan(*tile)),
+            Action::Kakan { pai } => Some(KanChoice::Kakan(*pai)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// 開槓決策的選項（第一個是不槓）。
+fn kan_options(legal: &[Action]) -> Vec<Option<KanChoice>> {
+    let mut options: Vec<Option<KanChoice>> = vec![None];
+    options.extend(kan_choices(legal).into_iter().map(Some));
+    options
+}
+
+/// 何切的候選牌（同一張牌的手切與摸切算一個）。
+fn discard_candidates(legal: &[Action]) -> Vec<Pai> {
+    let mut candidates: Vec<Pai> = Vec::new();
+    for a in legal {
+        if let Action::Discard { pai, .. } = a
+            && !candidates.contains(pai)
+        {
+            candidates.push(*pai);
+        }
+    }
+    candidates
+}
+
+/// 把一個實際動作（例如牌譜中玩家的選擇）對應到 `kind` 這種決策的選項編號；選項的列法與 [`BookPlayer`] 相同。
+///
+/// - `legal`：那次詢問的合法動作；
+/// - `riichi_pai`：立直決策時，策略決定要打的牌（立直決策是「打這張時要不要立直」）。
+///
+/// 動作走的是另一條路（例如評估何切，但玩家自摸了；評估立直，但玩家打的是別張）時回傳 `None`：
+/// 這個決策無法比較，差異會出現在更早的決策上。
+pub fn option_of_action(
+    kind: DecisionKind,
+    legal: &[Action],
+    action: &Action,
+    riichi_pai: Option<Pai>,
+) -> Option<usize> {
+    let yes_no = |yes: bool| Some(usize::from(yes));
+    match kind {
+        DecisionKind::Kyuushu => yes_no(*action == Action::KyuushuKyuuhai),
+        DecisionKind::Win => match action {
+            Action::KyuushuKyuuhai => None,
+            a => yes_no(matches!(a, Action::Tsumo | Action::Ron)),
+        },
+        DecisionKind::Kan => match action {
+            Action::Ankan { tile } => kan_options(legal)
+                .iter()
+                .position(|o| *o == Some(KanChoice::Ankan(*tile))),
+            Action::Kakan { pai } => kan_options(legal)
+                .iter()
+                .position(|o| *o == Some(KanChoice::Kakan(*pai))),
+            Action::Discard { .. } | Action::Riichi { .. } => Some(0),
+            _ => None,
+        },
+        DecisionKind::Discard => match action {
+            Action::Discard { pai, .. } | Action::Riichi { pai, .. } => {
+                discard_candidates(legal).iter().position(|p| p == pai)
+            }
+            _ => None,
+        },
+        DecisionKind::Riichi => match action {
+            Action::Riichi { pai, .. } if Some(*pai) == riichi_pai => Some(1),
+            Action::Discard { pai, .. } if Some(*pai) == riichi_pai => Some(0),
+            _ => None,
+        },
+        DecisionKind::Call => {
+            let sorted = |c: &[Pai; 2]| {
+                let mut c = *c;
+                c.sort();
+                c
+            };
+            let choice = match action {
+                Action::Pass => CallChoice::Pass,
+                Action::Chi { consumed } => CallChoice::Chi(sorted(consumed)),
+                Action::Pon { consumed } => CallChoice::Pon(sorted(consumed)),
+                Action::Daiminkan => CallChoice::Daiminkan,
+                _ => return None,
+            };
+            call_options(legal).iter().position(|c| match (c, &choice) {
+                (CallChoice::Chi(x), CallChoice::Chi(y))
+                | (CallChoice::Pon(x), CallChoice::Pon(y)) => sorted(x) == *y,
+                (a, b) => a == b,
+            })
+        }
+        DecisionKind::Predict => None,
     }
 }
 
@@ -625,5 +712,68 @@ mod tests {
         assert_eq!(readme_title(readme), "押引");
         assert_eq!(readme_summary(readme), "第一段\n第二行");
         assert_eq!(readme_summary("# 只有標題\n"), "");
+    }
+
+    /// 實際動作對應到決策選項：何切看牌、立直看是不是同一張牌、鳴牌不計兩張牌的順序、走另一條路時無法比較。
+    #[test]
+    fn option_of_action_maps_player_actions() {
+        let d = |t: &str| Action::Discard {
+            pai: p(t),
+            tsumogiri: false,
+        };
+        let legal = vec![d("1m"), d("5z"), Action::Tsumo];
+        assert_eq!(
+            option_of_action(DecisionKind::Discard, &legal, &d("5z"), None),
+            Some(1)
+        );
+        assert_eq!(
+            option_of_action(DecisionKind::Discard, &legal, &Action::Tsumo, None),
+            None
+        );
+        assert_eq!(
+            option_of_action(DecisionKind::Win, &legal, &Action::Tsumo, None),
+            Some(1)
+        );
+        assert_eq!(
+            option_of_action(DecisionKind::Win, &legal, &d("1m"), None),
+            Some(0)
+        );
+        let riichi = Action::Riichi {
+            pai: p("1m"),
+            tsumogiri: false,
+        };
+        assert_eq!(
+            option_of_action(DecisionKind::Riichi, &legal, &riichi, Some(p("1m"))),
+            Some(1)
+        );
+        assert_eq!(
+            option_of_action(DecisionKind::Riichi, &legal, &d("1m"), Some(p("1m"))),
+            Some(0)
+        );
+        // 策略要打 1m 立直，玩家打的是 5z：立直決策無法比較。
+        assert_eq!(
+            option_of_action(DecisionKind::Riichi, &legal, &d("5z"), Some(p("1m"))),
+            None
+        );
+        let calls = vec![
+            Action::Pass,
+            Action::Chi {
+                consumed: [p("2m"), p("3m")],
+            },
+            Action::Pon {
+                consumed: [p("4m"), p("4m")],
+            },
+        ];
+        let chi_reversed = Action::Chi {
+            consumed: [p("3m"), p("2m")],
+        };
+        assert_eq!(
+            option_of_action(DecisionKind::Call, &calls, &chi_reversed, None),
+            Some(1)
+        );
+        assert_eq!(
+            option_of_action(DecisionKind::Call, &calls, &Action::Pass, None),
+            Some(0)
+        );
     }
 }

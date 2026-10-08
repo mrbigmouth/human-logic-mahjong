@@ -13,4 +13,5 @@ pub use claim::{Claim, ClaimRecord, TargetSituation};
 pub use ctx::Ctx;
 pub use player::{
     BookPlayer, DecisionRecord, Force, Situation, Strategy, StrategyPlayer, book_strategy,
+    option_of_action,
 };

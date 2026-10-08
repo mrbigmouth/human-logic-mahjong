@@ -30,7 +30,7 @@ mj-cli / app(Tauri) ── 以上全部
 | `mj-sim` | 參考機器人（`RandomBot`、`GreedyBot`）；`replay` 牌譜重播；`predict_eval` 預測準確度；`counterfactual` 反事實決策評估；`duplicate` 對戰；`read_stats` 讀牌特徵匯出（M6） | M3 ✅ |
 | `mj-paifu` | 牌譜匯入：天鳳 mjlog XML／JSON → 共通的 `GameRecord` → 還原牌山、照牌譜出牌讓引擎重播並比對點數 → 完整事件紀錄與每個決策點的 `PlayerView`（`DecisionPoint`）；策略可「旁觀」真人對局做預測 | M4 ✅ |
 | `mj-tuner` | 可調參數的自動調整（預測以準確度擬合、決策以反事實期望值） | M8 |
-| `mj-review` | 逐手比對使用者與策略的選擇，附理由與反事實期望值（牌譜由 `mj-paifu` 匯入） | M7 |
+| `mj-review` | 牌譜復盤：逐手比對玩家與策略的選擇，附理由；選擇不同處在牌譜局面做反事實評估（玩家 vs 策略的成對差值）；差異分類與失誤彙整（`mj review`） | M7 ✅ |
 | `mj-mjai` | mjai bridge，與外部強 AI 對戰與比對 | M8 |
 | `mj-cli` | 執行檔 `mj`：`strategies`、`nanikiru`、`selfplay`、`import`、`predict-eval`、`evaluate`、`simulate`、`review`、`play`、`serve` | 持續 |
 

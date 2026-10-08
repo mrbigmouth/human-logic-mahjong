@@ -250,7 +250,13 @@ version = "0.1.0"
 dependencies = [
  "mj-core",
  "mj-engine",
+ "mj-paifu",
+ "mj-rules",
+ "mj-sim",
  "mj-strategy",
+ "mj-tools",
+ "rayon",
+ "serde",
 ]
 
 [[package]]

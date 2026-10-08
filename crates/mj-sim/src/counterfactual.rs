@@ -109,18 +109,30 @@ struct Rollouts {
     fallbacks: usize,
 }
 
+/// 快照點要評估的決策：哪一次詢問的哪一種決策。
+#[derive(Debug, Clone, Copy)]
+pub struct Point {
+    /// 做決策的座位
+    pub seat: u8,
+    /// 這個座位第幾次被詢問（= `DecisionRecord::act_index`）
+    pub act_index: u32,
+    /// 決策種類
+    pub kind: DecisionKind,
+    /// 選項數
+    pub options: usize,
+}
+
 /// 在 `worlds` 個新世界中，替每個選項各重打一次並累加到 `acc`。
-#[allow(clippy::too_many_arguments)]
 fn run_worlds(
     rules: &RiichiConfig,
     snap: &Snapshot,
     base: &[Box<dyn StrategyPlayer>],
-    record: &DecisionRecord,
-    seat: u8,
+    point: Point,
     seeds: std::ops::Range<u64>,
     opts: &Options,
     acc: &mut Rollouts,
 ) -> Result<(), String> {
+    let seat = point.seat;
     for world_seed in seeds {
         let mut world = snap.clone();
         if opts.determinize {
@@ -137,8 +149,8 @@ fn run_worlds(
         for (option, out) in acc.per_option.iter_mut().enumerate() {
             let mut ps: Vec<Box<dyn StrategyPlayer>> = base.iter().map(|p| p.clone_box()).collect();
             ps[usize::from(seat)].set_force(Some(Force {
-                act_index: record.act_index,
-                kind: record.kind,
+                act_index: point.act_index,
+                kind: point.kind,
                 option,
             }));
             ps[usize::from(seat)].set_record(true);
@@ -162,6 +174,19 @@ fn run_worlds(
     Ok(())
 }
 
+/// `a` 選項比 `b` 選項好多少（平均差）與標準誤，以同一組世界的成對差值計算。
+pub fn paired_diff(per_option: &[Vec<f64>], a: usize, b: usize) -> (f64, f64) {
+    let diffs: Vec<f64> = per_option[a]
+        .iter()
+        .zip(&per_option[b])
+        .map(|(x, y)| x - y)
+        .collect();
+    let n = diffs.len() as f64;
+    let mean = diffs.iter().sum::<f64>() / n;
+    let var = diffs.iter().map(|d| (d - mean).powi(2)).sum::<f64>() / (n - 1.0).max(1.0);
+    (mean, (var / n).sqrt())
+}
+
 /// 由每個選項的結果計算最佳選項、損失與標準誤。
 fn summarize_option(per_option: &[Vec<f64>], chosen: usize) -> (Vec<f64>, usize, f64, f64) {
     let ev: Vec<f64> = per_option
@@ -182,6 +207,84 @@ fn summarize_option(per_option: &[Vec<f64>], chosen: usize) -> (Vec<f64>, usize,
     (ev.clone(), best, ev[best] - ev[chosen], (var / n).sqrt())
 }
 
+/// 從快照評估一個決策的各選項。
+#[derive(Debug, Clone)]
+pub struct SnapshotEval {
+    /// 各選項的平均結果（名次點或點數）
+    pub option_ev: Vec<f64>,
+    /// 期望值最高的選項
+    pub best: usize,
+    /// 損失 = 最佳選項的期望值 − 被評估選項（`chosen`）的期望值
+    pub loss: f64,
+    /// 損失的標準誤
+    pub loss_se: f64,
+    /// 實際使用的世界數
+    pub rollouts: usize,
+    /// 重抽時保留立直者原手牌的次數
+    pub riichi_fallbacks: usize,
+    /// 每個選項在各世界的結果（同一個索引 = 同一個世界），可用 [`paired_diff`] 比較任兩個選項
+    pub per_option: Vec<Vec<f64>>,
+}
+
+/// 何時停止增加世界數。
+#[derive(Debug, Clone, Copy)]
+pub enum Settle {
+    /// `chosen` 就是最佳選項，或它與最佳選項的差距已顯著（決策評估用）
+    AgainstBest,
+    /// `chosen` 與這個選項的差距已顯著（復盤：玩家的選擇 vs 策略的選擇）
+    Against(usize),
+}
+
+/// 從快照 `snap` 評估 `point` 的每個選項：`base` 是快照當下的四家策略玩家（記憶、詢問次數都接得上），
+/// `chosen` 是要計算損失的選項（實際的選擇），`seed_base` 決定各世界的亂數。
+/// 差距不顯著時自動增加世界數。重播沒有走到決策點時回傳 `None`。
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_snapshot(
+    rules: &RiichiConfig,
+    snap: &Snapshot,
+    base: &[Box<dyn StrategyPlayer>],
+    point: Point,
+    chosen: usize,
+    settle: Settle,
+    seed_base: u64,
+    opts: &Options,
+) -> Option<SnapshotEval> {
+    let mut acc = Rollouts {
+        per_option: vec![Vec::new(); point.options],
+        fallbacks: 0,
+    };
+    let mut done = 0u64;
+    let step = opts.rollouts.max(2) as u64;
+    loop {
+        let seeds = seed_base + done..seed_base + done + step;
+        run_worlds(rules, snap, base, point, seeds, opts, &mut acc).ok()?;
+        done += step;
+        let settled = match settle {
+            Settle::AgainstBest => {
+                let (_, best, loss, se) = summarize_option(&acc.per_option, chosen);
+                best == chosen || loss > 2.0 * se
+            }
+            Settle::Against(other) => {
+                let (d, se) = paired_diff(&acc.per_option, other, chosen);
+                other == chosen || d.abs() > 2.0 * se
+            }
+        };
+        if settled || done as usize >= opts.max_rollouts {
+            break;
+        }
+    }
+    let (option_ev, best, loss, loss_se) = summarize_option(&acc.per_option, chosen);
+    Some(SnapshotEval {
+        option_ev,
+        best,
+        loss,
+        loss_se,
+        rollouts: done as usize,
+        riichi_fallbacks: acc.fallbacks,
+        per_option: acc.per_option,
+    })
+}
+
 /// 評估一個決策點。快照點不支援（搶槓）或重播沒有走到決策點時回傳 `None`。
 fn evaluate_point(
     strategy: &Arc<dyn Strategy>,
@@ -198,45 +301,35 @@ fn evaluate_point(
     else {
         return Ok(None);
     };
-    let mut acc = Rollouts {
-        per_option: vec![Vec::new(); record.options.len()],
-        fallbacks: 0,
+    let point = Point {
+        seat,
+        act_index: record.act_index,
+        kind: record.kind,
+        options: record.options.len(),
     };
     let seed_base = hand_seed(game_seed, (u32::from(seat) << 24) ^ record.act_index);
-    let mut done = 0u64;
-    let step = opts.rollouts.max(2) as u64;
-    loop {
-        let r = run_worlds(
-            &rules,
-            &snap,
-            &base,
-            &record,
-            seat,
-            seed_base + done..seed_base + done + step,
-            opts,
-            &mut acc,
-        );
-        if r.is_err() {
-            return Ok(None);
-        }
-        done += step;
-        let (_, best, loss, se) = summarize_option(&acc.per_option, record.chosen);
-        let settled = best == record.chosen || loss > 2.0 * se;
-        if settled || done as usize >= opts.max_rollouts {
-            break;
-        }
-    }
-    let (option_ev, best, loss, loss_se) = summarize_option(&acc.per_option, record.chosen);
+    let Some(e) = evaluate_snapshot(
+        &rules,
+        &snap,
+        &base,
+        point,
+        record.chosen,
+        Settle::AgainstBest,
+        seed_base,
+        opts,
+    ) else {
+        return Ok(None);
+    };
     Ok(Some(DecisionEval {
         game_seed,
         seat,
         record,
-        option_ev,
-        best,
-        loss,
-        loss_se,
-        rollouts: done as usize,
-        riichi_fallbacks: acc.fallbacks,
+        option_ev: e.option_ev,
+        best: e.best,
+        loss: e.loss,
+        loss_se: e.loss_se,
+        rollouts: e.rollouts,
+        riichi_fallbacks: e.riichi_fallbacks,
     }))
 }
 

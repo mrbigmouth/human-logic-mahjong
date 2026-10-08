@@ -9,4 +9,10 @@ rust-version.workspace = true
 [dependencies]
 mj-core.workspace = true
 mj-engine.workspace = true
+mj-rules.workspace = true
 mj-strategy.workspace = true
+mj-tools.workspace = true
+mj-paifu.workspace = true
+mj-sim.workspace = true
+rayon.workspace = true
+serde.workspace = true

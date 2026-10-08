@@ -4,6 +4,7 @@ mod evaluate;
 mod import;
 mod nanikiru;
 mod predict_eval;
+mod review;
 mod selfplay;
 mod simulate;
 
@@ -84,6 +85,40 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         seed: u64,
     },
+    /// 牌譜復盤：逐手比較玩家與策略的選擇，附策略的理由；選擇不同的地方用反事實模擬算出各選項的期望值，
+    /// 最後彙整失誤類型
+    Review {
+        /// 牌譜檔或目錄（天鳳 mjlog XML／JSON）
+        #[arg(required = true)]
+        logs: Vec<PathBuf>,
+        /// 復盤哪位玩家（牌譜中的名稱）；沒指定時四家都復盤
+        #[arg(long)]
+        player: Option<String>,
+        /// 復盤哪個座位（0 = 起家）；優先於 --player
+        #[arg(long)]
+        seat: Option<u8>,
+        /// 策略名稱
+        #[arg(long, default_value = "tenhou-normal-4p-hanchan/hand-reading")]
+        strategy: String,
+        /// 每個決策都做反事實評估（預設只評估與策略選擇不同的決策）
+        #[arg(long)]
+        all: bool,
+        /// 逐手報告列出哪些決策：differences（與策略不同）、mistakes（失誤）、all
+        #[arg(long, default_value = "differences")]
+        show: String,
+        /// 每個選項重打幾次（每次是一個重抽過看不到的牌的「可能世界」；越多越準、越慢）
+        #[arg(long, default_value_t = 64)]
+        rollouts: usize,
+        /// 衡量方式：points（這一局的點數，預設）或 placement（名次點，打到整場結束）
+        #[arg(long, default_value = "points")]
+        metric: String,
+        /// 使用對手的真實手牌（結果論），不重抽
+        #[arg(long)]
+        omniscient: bool,
+        /// 把復盤結果寫成 JSON 檔
+        #[arg(long)]
+        json: Option<PathBuf>,
+    },
     /// 讀牌資料匯出：在牌譜的每個打牌時點，對三家對手輸出「看得到的特徵＋真相」的 CSV
     /// （tenpai.csv、waits.csv），供分析與校準讀牌預測
     ReadStats {
@@ -142,8 +177,6 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         seed: u64,
     },
-    /// 用策略復盤一份牌譜（M7）
-    Review { log: PathBuf, strategy: String },
     /// 在終端機與 AI 對戰（M9）
     Play { strategy: String },
     /// 以 HTTP 提供 UI 用的 API，供瀏覽器開發（M9）
@@ -213,6 +246,39 @@ fn main() -> ExitCode {
             seed,
         } => {
             return exit(predict_eval::run(&strategy, &logs, games, seed));
+        }
+        Command::Review {
+            logs,
+            player,
+            seat,
+            strategy,
+            all,
+            show,
+            rollouts,
+            metric,
+            omniscient,
+            json,
+        } => {
+            let metric = match metric.as_str() {
+                "placement" => mj_sim::counterfactual::Metric::Placement,
+                "points" => mj_sim::counterfactual::Metric::Points,
+                other => {
+                    eprintln!("未知的衡量方式 {other}（可用 placement 或 points）");
+                    return ExitCode::FAILURE;
+                }
+            };
+            return exit(review::run(&review::Options {
+                logs,
+                strategy,
+                player,
+                seat,
+                all,
+                show,
+                rollouts,
+                metric,
+                omniscient,
+                json,
+            }));
         }
         Command::ReadStats { logs, out } => {
             let (records, mut errors) = mj_paifu::load_all(&logs);
@@ -286,7 +352,6 @@ fn main() -> ExitCode {
             blocks,
             seed,
         } => return exit(simulate::run(&entrants, blocks, seed)),
-        Command::Review { .. } => "M7",
         Command::Play { .. } | Command::Serve { .. } => "M9",
     };
     eprintln!("尚未實作（預計在 {milestone} 完成，見 docs/04-milestones.md）");
