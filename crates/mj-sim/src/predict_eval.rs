@@ -6,7 +6,7 @@
 //! - 技巧分數：1 − Brier ÷ 基準 Brier（基準 = 永遠預測平均發生率），> 0 代表比瞎猜平均值好；
 //! - 校準表：把預測依機率分成 10 組，比較「預測機率」與「實際發生率」。
 
-use crate::replay::{furiten_at, hand_winners_after, hands_at};
+use crate::replay::{furiten_at, hand_winners_after, hand_wins_after, hands_at};
 use mj_engine::{Event, GameConfig, Player, run_game_with};
 use mj_paifu::GameRecord;
 use mj_paifu::replay::replay;
@@ -109,6 +109,10 @@ pub fn judge(log: &[Event], c: &ClaimRecord) -> Option<bool> {
             Some(waits.contains(&tile) && !furiten_at(log, c.at_event, seat, &waits))
         }
         Claim::IWinThisHand { .. } => Some(hand_winners_after(log, c.at_event).contains(&c.me)),
+        Claim::BigHand { seat, .. } => hand_wins_after(log, c.at_event)
+            .into_iter()
+            .find(|(w, _)| *w == seat)
+            .map(|(_, base)| base >= 2000),
     }
 }
 

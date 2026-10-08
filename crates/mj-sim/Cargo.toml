@@ -11,6 +11,7 @@ mj-core.workspace = true
 mj-engine.workspace = true
 mj-strategy.workspace = true
 mj-calc.workspace = true
+mj-tools.workspace = true
 rand.workspace = true
 rand_chacha.workspace = true
 mj-rules.workspace = true

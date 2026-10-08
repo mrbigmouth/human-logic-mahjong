@@ -33,6 +33,9 @@ pub fn claim_text(c: &Claim) -> String {
             format!("打 {tile} 被座位 {seat} 榮和的機率 {:.0}%", p * 100.0)
         }
         Claim::IWinThisHand { p } => format!("本局由我和牌的機率 {:.0}%", p * 100.0),
+        Claim::BigHand { seat, p } => {
+            format!("座位 {seat} 和牌時是滿貫以上的機率 {:.0}%", p * 100.0)
+        }
     }
 }
 

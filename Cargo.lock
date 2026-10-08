@@ -275,6 +275,7 @@ dependencies = [
  "mj-paifu",
  "mj-rules",
  "mj-strategy",
+ "mj-tools",
  "rand",
  "rand_chacha",
  "rayon",

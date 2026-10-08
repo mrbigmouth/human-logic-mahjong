@@ -35,7 +35,7 @@ enum Command {
         #[arg(long, default_value = "")]
         dora: String,
         /// 策略名稱
-        #[arg(long, default_value = "tenhou-normal-4p-hanchan/push-fold")]
+        #[arg(long, default_value = "tenhou-normal-4p-hanchan/hand-reading")]
         strategy: String,
     },
     /// 機器人或策略自我對戰並輸出統計（兼引擎模糊測試）
@@ -72,7 +72,7 @@ enum Command {
     /// 輸出各預測函式的準確度
     PredictEval {
         /// 策略名稱（四家都用這個策略）
-        #[arg(long, default_value = "tenhou-normal-4p-hanchan/push-fold")]
+        #[arg(long, default_value = "tenhou-normal-4p-hanchan/hand-reading")]
         strategy: String,
         /// 改用這些牌譜（檔案或目錄）：策略旁觀真人對局並預測，不自我對戰
         #[arg(long, num_args = 1..)]
@@ -84,11 +84,21 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         seed: u64,
     },
+    /// 讀牌資料匯出：在牌譜的每個打牌時點，對三家對手輸出「看得到的特徵＋真相」的 CSV
+    /// （tenpai.csv、waits.csv），供分析與校準讀牌預測
+    ReadStats {
+        /// 牌譜檔或目錄
+        #[arg(required = true)]
+        logs: Vec<PathBuf>,
+        /// 輸出目錄
+        #[arg(long, default_value = "target/read-stats")]
+        out: PathBuf,
+    },
     /// 決策品質評估（反事實模擬）：在決策點改選其他選項重打這一局，比較期望點數，
     /// 依決策種類統計「平均損失點數」
     Evaluate {
         /// 策略名稱（四家都用這個策略）
-        #[arg(long, default_value = "tenhou-normal-4p-hanchan/push-fold")]
+        #[arg(long, default_value = "tenhou-normal-4p-hanchan/hand-reading")]
         strategy: String,
         /// 對局（半莊）數
         #[arg(long, default_value_t = 20)]
@@ -203,6 +213,26 @@ fn main() -> ExitCode {
             seed,
         } => {
             return exit(predict_eval::run(&strategy, &logs, games, seed));
+        }
+        Command::ReadStats { logs, out } => {
+            let (records, mut errors) = mj_paifu::load_all(&logs);
+            let (tenpai, waits, replay_errors) = mj_sim::read_stats::collect_records(&records);
+            errors.extend(replay_errors);
+            let write = |name: &str, body: &str| {
+                std::fs::create_dir_all(&out)
+                    .and_then(|_| std::fs::write(out.join(name), body))
+                    .map_err(|e| format!("寫入 {} 失敗：{e}", out.join(name).display()))
+            };
+            let r = write("tenpai.csv", &tenpai).and_then(|_| write("waits.csv", &waits));
+            println!(
+                "牌譜 {} 場（無法使用 {} 場）→ {}：tenpai.csv {} 列、waits.csv {} 列",
+                records.len(),
+                errors.len(),
+                out.display(),
+                tenpai.lines().count() - 1,
+                waits.lines().count() - 1
+            );
+            return exit(r);
         }
         Command::Evaluate {
             strategy,

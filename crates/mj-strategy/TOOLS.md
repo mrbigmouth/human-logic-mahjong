@@ -114,8 +114,27 @@ src/strategy-list/
 | `genbutsu(view, seat) -> TileCounts` | 對某家的現物（他打過的、他立直後別人打過的、同巡內別人打過的） |
 | `is_genbutsu(view, seat, tile)` | 是否為現物 |
 | `is_suji(view, seat, tile)` | 是否為筋牌（1–3 看 +3、7–9 看 −3、4–6 兩邊都要） |
+| `suji(view, seat, tile) -> Suji` | 筋的種類：`None` 無筋、`Half` 片筋（4–6 只有一邊是現物）、`Full` 筋／両筋 |
 | `is_no_chance(view, tile)` | No Chance：兩面聽這張所需的牌已 4 張可見 |
+| `ryanmen_chances(view, tile) -> u8` | 兩面聽這張的搭子還有幾種可能存在（0–2；0 = No Chance） |
+| `is_one_chance(view, tile)` | One Chance：兩面搭子還可能存在，但每一種都含有已見 3 張的牌 |
+| `riichi_declaration_tile(view, seat) -> Option<Tile>` | 某家的立直宣言牌 |
 | `honor_visible(view, tile) -> u8` | 字牌看得到幾張 |
+
+### `tools::river` 牌河與副露的事實
+| 函式 | 說明 |
+|---|---|
+| `turn(view, seat) -> usize` | 某家打過幾張（巡目） |
+| `trailing_tsumogiri(view, seat) -> usize` | 牌河最後連續摸切的張數（剛手切為 0） |
+| `recent_tedashi(view, seat, k) -> usize` | 最近 `k` 張中手切的張數 |
+| `last_tedashi(view, seat) -> Option<(usize, Pai)>` | 最後一次手切（第幾張、哪張牌） |
+| `middle_tedashi_since(view, seat, from) -> usize` | 第 `from` 張以後手切的中張牌（3–7）張數 |
+| `is_middle(tile)` | 是否為中張牌（數牌 3–7） |
+| `suit_counts(view, seat) -> [u8; 4]` / `suit_index(suit)` | 各花色打出的張數 `[萬, 筒, 索, 字]` |
+| `open_melds(view, seat) -> usize` | 副露（不含暗槓）組數 |
+| `meld_dora(view, seat) -> u8` | 副露中看得到的寶牌張數（含赤五） |
+| `has_yakuhai_meld(view, seat)` | 副露中有沒有對他而言是役牌的刻子 |
+| `meld_suits(view, seat) -> u8` | 副露用到的數牌花色（位元：萬 1、筒 2、索 4） |
 
 ### `tools::yaku_path` 役的路線
 | 函式 | 說明 |
@@ -140,6 +159,7 @@ src/strategy-list/
 | `dora_value(view, tile) -> u8` | 某種牌值幾張寶牌（不含赤五） |
 | `pai_dora_value(view, pai) -> u8` | 某張牌值幾張寶牌（含赤五） |
 | `my_dora_count(view) -> u8` | 自己手上共有幾張寶牌 |
+| `unseen_dora(view) -> u8` | 自己看不到的寶牌張數（含赤五；可能在別人手上或牌山中） |
 
 ### `tools::table` 牌桌
 | 函式 | 說明 |
@@ -150,6 +170,7 @@ src/strategy-list/
 | `riichi_seq(view, seat)` | 某家立直宣言牌的打牌順序 |
 | `my_turn(view) -> usize` | 自己打過幾張（巡目） |
 | `my_winds(view) -> (自風, 場風)` / `is_yakuhai_for_me(view, tile)` | 風位與役牌 |
+| `is_yakuhai_for(view, seat, tile)` | 某種牌對某家是不是役牌 |
 | `i_am_closed(view)` | 自己是否門前清 |
 | `standing(view) -> Standing` | 名次與點差 |
 
@@ -173,16 +194,25 @@ pub fn predict(ctx: &Ctx, seat: Seat) -> f64 {
 | `Tenpai { seat, p }` | 某家此刻已聽牌 | 他的手牌向聽數為 0 |
 | `Waits { seat, tile, p }` | 打出這張會被某家榮和（不考慮役） | 這張在他的聽牌張中，且他沒有振聽 |
 | `IWinThisHand { p }` | 本局最後由我和牌 | 本局結束時我有沒有和牌 |
+| `BigHand { seat, p }` | 某家如果本局和牌，是滿貫以上 | 他本局和牌時基本點 ≥ 2000；他沒和牌時不列入評分 |
 
 需要新的預測種類時，在 `src/framework/claim.rs` 加上一種 `Claim`，並在 `mj-sim/src/predict_eval.rs` 的 `judge` 寫出真相怎麼算。
 
 評估指令：
 
 ```sh
-mj predict-eval --strategy tenhou-normal-4p-hanchan/push-fold --games 300
+mj predict-eval --strategy tenhou-normal-4p-hanchan/hand-reading --games 300
 ```
 
 輸出各預測函式的 Brier 分數、技巧分數（相對於永遠猜平均值）、對數損失與校準表。
+
+用真人牌譜校準預測時（`hand-reading` 的讀牌就是這樣做的）：
+
+1. `mj read-stats data/tenhou --out target/read-stats` 匯出兩個 CSV：
+   - `tenpai.csv`：每個打牌時點 × 每家對手的特徵（巡目、副露、手切摸切、副露的寶牌……）與真相（聽牌、本局是否和牌與打點）；
+   - `waits.csv`：已聽牌的對手 × 自己手上每種牌的安全度特徵（筋、壁、寶牌……）與真相（是否為聽牌張、振聽）。
+2. 用任何工具（例如 Python）依特徵分組看實際發生率，或做邏輯迴歸得到各線索的勝算倍數，寫成具名常數。
+3. 擬合與驗證用不同日期的牌譜，再用 `mj predict-eval --logs <驗證用牌譜>` 確認技巧分數與校準表。
 
 ## 6. 決策的評分（反事實模擬）
 
@@ -191,8 +221,8 @@ mj predict-eval --strategy tenhou-normal-4p-hanchan/push-fold --games 300
 改選每個選項重打多次，比較各選項的期望結果，算出實際選擇的「損失」。
 
 ```sh
-mj evaluate --strategy tenhou-normal-4p-hanchan/push-fold --games 20                   # 名次點（打到整場結束）
-mj evaluate --strategy tenhou-normal-4p-hanchan/push-fold --games 20 --metric points   # 這一局的點數（較快、雜訊小）
+mj evaluate --strategy tenhou-normal-4p-hanchan/hand-reading --games 20                   # 名次點（打到整場結束）
+mj evaluate --strategy tenhou-normal-4p-hanchan/hand-reading --games 20 --metric points   # 這一局的點數（較快、雜訊小）
 mj evaluate ... --kinds discard,call --json result.json                      # 只評估某些決策、輸出 JSON
 ```
 

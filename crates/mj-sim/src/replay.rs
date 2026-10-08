@@ -88,18 +88,26 @@ pub fn furiten_at(log: &[Event], index: usize, seat: Seat, waits: &[mj_core::Til
 
 /// 第 `index` 個事件之後，這一局（到下一個 `StartKyoku` 之前）的和牌者。流局時為空。
 pub fn hand_winners_after(log: &[Event], index: usize) -> Vec<Seat> {
-    let mut winners = Vec::new();
+    hand_wins_after(log, index)
+        .into_iter()
+        .map(|(w, _)| w)
+        .collect()
+}
+
+/// 第 `index` 個事件之後，這一局的和牌：（和牌者, 基本點）。流局時為空。
+pub fn hand_wins_after(log: &[Event], index: usize) -> Vec<(Seat, i32)> {
+    let mut wins = Vec::new();
     for ev in &log[index.min(log.len())..] {
         match ev {
             Event::StartKyoku { .. } => break,
             Event::HandEnd {
-                end: HandEnd::Win { winner, .. },
+                end: HandEnd::Win { winner, score, .. },
                 ..
-            } => winners.push(*winner),
+            } => wins.push((*winner, score.base)),
             _ => {}
         }
     }
-    winners
+    wins
 }
 
 #[cfg(test)]

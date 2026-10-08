@@ -36,3 +36,33 @@ pub fn my_dora_count(view: &PlayerView) -> u8 {
         .map(|&p| pai_dora_value(view, p))
         .sum()
 }
+
+/// 自己看不到的寶牌張數（寶牌每種 4 張減去看得到的，加上看不到的赤五；赤五共 3 張）。
+/// 這些寶牌在別人手上或牌山中：越多，別人的手越可能變大。
+pub fn unseen_dora(view: &PlayerView) -> u8 {
+    let seen = crate::visible::visible_counts(view);
+    let dora: u8 = dora_tiles(view)
+        .iter()
+        .map(|&d| 4 - seen.get(d).min(4))
+        .sum();
+    let rivers = view
+        .rivers
+        .iter()
+        .flatten()
+        .filter(|d| !d.called)
+        .map(|d| d.pai);
+    let melds = view
+        .melds
+        .iter()
+        .flatten()
+        .flat_map(|m| m.tiles.iter().copied());
+    let reds = view
+        .hand_pais
+        .iter()
+        .copied()
+        .chain(rivers)
+        .chain(melds)
+        .filter(|p| p.red)
+        .count() as u8;
+    dora + 3u8.saturating_sub(reds)
+}

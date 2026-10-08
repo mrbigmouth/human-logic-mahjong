@@ -330,13 +330,22 @@ fn sequence(
         last_discard = Some((cur, pai));
 
         // 是否有人鳴這張牌：他的下一個摸牌欄是鳴牌，來源是打牌者，而且鳴的是這張牌。
-        let caller = (1..4).map(|i| (cur + i) % 4).find_map(|s| {
-            let Some(Entry::Call(cs)) = takes[usize::from(s)].get(ti[usize::from(s)]) else {
-                return None;
-            };
-            let cs = call_string(cs, red).ok()?;
-            ((s + cs.source_offset()) % 4 == cur && cs.key == pai).then_some((s, cs))
-        });
+        // 同時有人能吃、有人能碰時，碰（槓）優先：吃的那一欄是之後另一張同樣的牌。
+        let candidates: Vec<(Seat, CallString)> = (1..4)
+            .map(|i| (cur + i) % 4)
+            .filter_map(|s| {
+                let Some(Entry::Call(cs)) = takes[usize::from(s)].get(ti[usize::from(s)]) else {
+                    return None;
+                };
+                let cs = call_string(cs, red).ok()?;
+                ((s + cs.source_offset()) % 4 == cur && cs.key == pai).then_some((s, cs))
+            })
+            .collect();
+        let caller = candidates
+            .iter()
+            .find(|(_, cs)| cs.letter != 'c')
+            .or(candidates.first())
+            .cloned();
         match caller {
             Some((s, cs)) => {
                 ti[usize::from(s)] += 1;
@@ -381,5 +390,33 @@ mod tests {
         assert_eq!(c.source_offset(), 1);
         let c = call_string("25k522525", 3).unwrap();
         assert_eq!((c.letter, c.key), ('k', "0p".parse().unwrap()));
+    }
+
+    /// 同一張牌有人能吃、有人能碰時，碰優先；吃的那一欄留給之後同樣的牌。
+    /// （座位 0 先後打出兩張 8p：第一張被對家碰，第二張才被下家吃。）
+    #[test]
+    fn pon_takes_priority_over_chi() {
+        let t = |v: &[i64]| v.iter().map(|&c| Entry::Tile(c)).collect::<Vec<_>>();
+        let c = |s: &str| vec![Entry::Call(s.to_string())];
+        let takes = vec![t(&[11, 12]), c("c383637"), c("38p3838"), t(&[13])];
+        let discards = vec![t(&[38, 38]), t(&[19]), t(&[11]), t(&[60])];
+        let res = Result_ {
+            wins: vec![],
+            kyuushu: false,
+            sanchahou: false,
+        };
+        let steps = sequence(0, &takes, &discards, &res, 3).unwrap();
+        let calls: Vec<Seat> = steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::Act {
+                    action: Action::Discard { .. },
+                    ..
+                }
+                | Step::Draw { .. } => None,
+                Step::Act { seat, .. } => Some(*seat),
+            })
+            .collect();
+        assert_eq!(calls, vec![2, 1]);
     }
 }

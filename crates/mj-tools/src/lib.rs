@@ -10,13 +10,15 @@
 //! | [`hand`] | 向聽、進張、聽牌張、何切排序（`mj-calc` 的整理） |
 //! | [`yaku_path`] | 鳴牌後還有沒有役 |
 //! | [`dora`] | 寶牌、赤五 |
-//! | [`safety`] | 現物、筋、No Chance 等安全度「事實」（不含機率推測） |
+//! | [`safety`] | 現物、筋、No Chance、One Chance 等安全度「事實」（不含機率推測） |
+//! | [`river`] | 牌河與副露的事實：手切／摸切順序、各花色張數、副露的寶牌與役牌 |
 //! | [`value`] | 和牌點數計算、目前手牌若和牌值多少 |
 //! | [`table`] | 牌桌狀態：誰立直、第幾巡、座位與風位 |
 
 pub mod after;
 pub mod dora;
 pub mod hand;
+pub mod river;
 pub mod safety;
 pub mod table;
 pub mod value;

@@ -114,29 +114,18 @@ impl Snapshot {
         // 先處理立直者（有限制），再處理其他對手。
         let mut order = opponents.clone();
         order.sort_by_key(|&s| st.p[s].riichi == RiichiState::None);
-        for &s in &order {
-            let n = st.p[s].hand.len();
-            let new_hand = if st.p[s].riichi != RiichiState::None {
-                let forbidden = riichi_forbidden(st, s);
-                match sample_tenpai(&mut pool, n, &forbidden, rng) {
-                    Some(h) => h,
-                    None => {
-                        report.riichi_fallbacks += 1;
-                        // 保留原本的手牌：把那些牌從可分配的牌中取出。
-                        let keep = st.p[s].hand.clone();
-                        for t in &keep {
-                            let i = pool
-                                .iter()
-                                .position(|p| p == t)
-                                .expect("kept tile is unseen");
-                            pool.swap_remove(i);
-                        }
-                        keep
-                    }
-                }
-            } else {
-                pool.drain(..n).collect()
-            };
+        let seats: Vec<HiddenHand> = order
+            .iter()
+            .map(|&s| HiddenHand {
+                seat: s,
+                riichi: st.p[s].riichi != RiichiState::None,
+                forbidden: riichi_forbidden(st, s),
+                original: st.p[s].hand.clone(),
+            })
+            .collect();
+        let (hands, fallbacks) = assign_hands(&mut pool, &seats, sample_tenpai, rng);
+        report.riichi_fallbacks += fallbacks;
+        for (s, new_hand) in hands {
             let ps = &mut st.p[s];
             ps.hand = new_hand;
             ps.hand.sort();
@@ -165,6 +154,63 @@ impl Snapshot {
             *chi = None;
         }
         report
+    }
+}
+
+/// 一家對手的門前手牌（重抽前）。
+struct HiddenHand {
+    seat: usize,
+    riichi: bool,
+    /// 立直者不能聽的牌種（見 [`riichi_forbidden`]）
+    forbidden: Vec<Tile>,
+    /// 原本（真實）的手牌
+    original: Vec<Pai>,
+}
+
+/// 從 `pool`（已洗亂的看不到的牌）分配對手的門前手牌，回傳（每家的新手牌, 保留原手牌的立直者人數）。
+///
+/// 立直者用 `sample` 抽聽牌的手牌；抽不到時保留他原本的手牌。保留的手牌要先從 pool 取出，
+/// 否則先處理的其他人可能已經用掉那些牌，所以遇到這種情況就把他列入「保留」、整個重新分配。
+fn assign_hands<R: Rng>(
+    pool: &mut Vec<Pai>,
+    seats: &[HiddenHand],
+    mut sample: impl FnMut(&mut Vec<Pai>, usize, &[Tile], &mut R) -> Option<Vec<Pai>>,
+    rng: &mut R,
+) -> (Vec<(usize, Vec<Pai>)>, usize) {
+    let mut kept: Vec<usize> = Vec::new();
+    loop {
+        let mut p = pool.clone();
+        for &k in &kept {
+            for t in &seats[k].original {
+                let i = p.iter().position(|x| x == t).expect("kept tile is unseen");
+                p.swap_remove(i);
+            }
+        }
+        let mut out = Vec::new();
+        let mut failed = None;
+        for (i, h) in seats.iter().enumerate() {
+            let n = h.original.len();
+            if kept.contains(&i) {
+                out.push((h.seat, h.original.clone()));
+            } else if h.riichi {
+                match sample(&mut p, n, &h.forbidden, rng) {
+                    Some(hand) => out.push((h.seat, hand)),
+                    None => {
+                        failed = Some(i);
+                        break;
+                    }
+                }
+            } else {
+                out.push((h.seat, p.drain(..n).collect()));
+            }
+        }
+        match failed {
+            Some(i) => kept.push(i),
+            None => {
+                *pool = p;
+                return (out, kept.len());
+            }
+        }
     }
 }
 
@@ -259,4 +305,52 @@ fn build_complete(available: &TileCounts, sets: usize, rng: &mut impl Rng) -> Op
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha8Rng;
+
+    fn pais(s: &str) -> Vec<Pai> {
+        mj_core::parse_pais(s).unwrap()
+    }
+
+    /// 兩家立直：先處理的一家抽到了後一家原本的牌，後一家又抽不到聽牌而要保留原手牌時，
+    /// 必須先保留他的牌再重新分配（原本會因為牌已被用掉而 panic）。
+    #[test]
+    fn kept_riichi_hand_is_reserved_first() {
+        let mut pool = pais("3m4m1m2m");
+        let seats = [
+            HiddenHand {
+                seat: 1,
+                riichi: true,
+                forbidden: vec![],
+                original: pais("1m2m"),
+            },
+            HiddenHand {
+                seat: 2,
+                riichi: true,
+                // 以「禁止聽 7z」標記這家：測試用的抽樣對他一律失敗。
+                forbidden: vec!["7z".parse().unwrap()],
+                original: pais("3m4m"),
+            },
+        ];
+        // 測試用的抽樣：有禁止牌的一家失敗，其他人拿 pool 最前面的牌。
+        let sample = |p: &mut Vec<Pai>, n: usize, forbidden: &[Tile], _: &mut ChaCha8Rng| {
+            forbidden.is_empty().then(|| p.drain(..n).collect())
+        };
+        let mut rng = ChaCha8Rng::seed_from_u64(0);
+        let (hands, fallbacks) = assign_hands(&mut pool, &seats, sample, &mut rng);
+        assert_eq!(fallbacks, 1);
+        let get = |s: usize| {
+            let mut h = hands.iter().find(|(x, _)| *x == s).unwrap().1.clone();
+            h.sort();
+            h
+        };
+        assert_eq!(get(1), pais("1m2m"));
+        assert_eq!(get(2), pais("3m4m"));
+        assert!(pool.is_empty());
+    }
 }

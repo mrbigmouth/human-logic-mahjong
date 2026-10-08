@@ -48,6 +48,13 @@ pub fn is_yakuhai_for_me(view: &PlayerView, tile: Tile) -> bool {
     tile.is_dragon() || tile == seat || tile == round
 }
 
+/// 這種牌對 `seat` 是不是役牌（三元牌、他的自風、場風）。
+pub fn is_yakuhai_for(view: &PlayerView, seat: Seat, tile: Tile) -> bool {
+    tile.is_dragon()
+        || tile == Tile::wind(view.seat_wind(seat))
+        || tile == Tile::wind(view.round_wind)
+}
+
 /// 自己是否門前清（沒有吃、碰、明槓）。
 pub fn i_am_closed(view: &PlayerView) -> bool {
     view.melds[usize::from(view.me)]

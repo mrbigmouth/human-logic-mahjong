@@ -21,13 +21,19 @@ pub enum Claim {
     /// 這一局最後是不是由我和牌（押引判斷用，例如「我跟立直者對攻能不能贏」）。
     /// 真相：本局結束時我有沒有和牌；本局由其他人和牌或流局都算「否」。
     IWinThisHand { p: f64 },
+    /// 如果 `seat` 這一局和牌，是否為滿貫以上（基本點 ≥ 2000，例如閒家榮和 ≥ 8000 點）。打點預測。
+    /// 真相：本局之後 `seat` 和牌時的計分；他沒有和牌時無法判定（不列入評分）。
+    BigHand { seat: Seat, p: f64 },
 }
 
 impl Claim {
     /// 預測的機率。
     pub fn p(&self) -> f64 {
         match *self {
-            Claim::Tenpai { p, .. } | Claim::Waits { p, .. } | Claim::IWinThisHand { p } => p,
+            Claim::Tenpai { p, .. }
+            | Claim::Waits { p, .. }
+            | Claim::IWinThisHand { p }
+            | Claim::BigHand { p, .. } => p,
         }
     }
 
@@ -37,6 +43,7 @@ impl Claim {
             Claim::Tenpai { .. } => "聽牌判斷",
             Claim::Waits { .. } => "聽牌張判斷",
             Claim::IWinThisHand { .. } => "本局和牌",
+            Claim::BigHand { .. } => "滿貫以上",
         }
     }
 }
@@ -71,7 +78,9 @@ impl Claim {
     /// 預測的對象座位（「本局和牌」為 `None`，代表自己）。
     pub fn target(&self) -> Option<Seat> {
         match *self {
-            Claim::Tenpai { seat, .. } | Claim::Waits { seat, .. } => Some(seat),
+            Claim::Tenpai { seat, .. }
+            | Claim::Waits { seat, .. }
+            | Claim::BigHand { seat, .. } => Some(seat),
             Claim::IWinThisHand { .. } => None,
         }
     }
