@@ -48,7 +48,47 @@ impl fmt::Display for EngineError {
 
 impl std::error::Error for EngineError {}
 
+/// 一局中途停止的原因（內部使用）：真正的錯誤，或到達快照目標。
+pub(crate) enum Halt {
+    Error(EngineError),
+    /// 到達快照目標，局面已保存
+    Snapshot(Box<crate::snapshot::Snapshot>),
+    /// 快照目標落在不支援繼續的位置（搶槓的詢問）
+    Unsupported,
+}
+
+impl From<EngineError> for Halt {
+    fn from(e: EngineError) -> Self {
+        Halt::Error(e)
+    }
+}
+
+/// 從快照繼續時，要從哪一個詢問點開始。
+#[derive(Debug, Clone)]
+pub(crate) enum Resume {
+    /// 自己的回合（已經摸完牌，或吃碰後準備打牌）
+    OwnTurn {
+        seat: Seat,
+        drawn: Option<Pai>,
+        rinshan: bool,
+        after_call: bool,
+    },
+    /// 他家打牌後的回應階段，從第 `k` 個回應者（1 = 下家）開始；
+    /// `rons`、`call`、`chi` 是在他之前的回應者已經做出的選擇。
+    Response {
+        discarder: Seat,
+        pai: Pai,
+        riichi: bool,
+        double: bool,
+        k: u8,
+        rons: Vec<Seat>,
+        call: Option<(Seat, Action)>,
+        chi: Option<(Seat, Action)>,
+    },
+}
+
 /// 開局時的狀態（由 `game` 提供）。
+#[derive(Clone)]
 pub(crate) struct KyokuSetup {
     pub round_wind: u8,
     pub kyoku: u8,
@@ -57,6 +97,8 @@ pub(crate) struct KyokuSetup {
     pub scores: [i32; 4],
     /// 正規局數（半莊 8）
     pub total_kyoku: u8,
+    /// 這一局之前已經打了幾局（決定牌山 seed 與快照後的繼續）
+    pub hands_played: u32,
 }
 
 /// 一局的結果（交回 `game` 決定下一局）。
@@ -75,9 +117,31 @@ pub(crate) struct KyokuOutcome {
 pub(crate) struct Table<'p> {
     pub players: [&'p mut dyn Player; 4],
     pub log: Option<Vec<Event>>,
+    /// 本場對局中，各座位已經被詢問過幾次（= 玩家的 act_index）
+    pub asks: [u32; 4],
+    /// 快照目標：在即將第 n 次詢問這個座位時保存局面並停止
+    pub target: Option<(Seat, u32)>,
 }
 
-impl Table<'_> {
+impl<'p> Table<'p> {
+    pub fn new(
+        players: [&'p mut dyn Player; 4],
+        keep_log: bool,
+        target: Option<(Seat, u32)>,
+    ) -> Self {
+        Table {
+            players,
+            log: keep_log.then(Vec::new),
+            asks: [0; 4],
+            target,
+        }
+    }
+
+    /// 接下來詢問 `seat` 時是否就是快照目標。
+    pub fn snapshot_due(&self, seat: Seat) -> bool {
+        self.target == Some((seat, self.asks[usize::from(seat)]))
+    }
+
     /// 發送一個事件。
     pub fn emit(&mut self, ev: Event) {
         for (s, p) in self.players.iter_mut().enumerate() {
@@ -91,6 +155,7 @@ impl Table<'_> {
     /// 詢問玩家要選哪個動作，並檢查回傳的動作是否合法。
     fn ask(&mut self, view: &PlayerView, legal: Vec<Action>) -> Result<Action, EngineError> {
         let seat = view.me;
+        self.asks[usize::from(seat)] += 1;
         let action = self.players[usize::from(seat)].act(view, &legal);
         if legal.contains(&action) {
             Ok(action)
@@ -105,37 +170,37 @@ impl Table<'_> {
 }
 
 /// 單一玩家在這一局的狀態（含不公開的手牌）。
-#[derive(Default)]
-struct PState {
+#[derive(Default, Clone)]
+pub(crate) struct PState {
     /// 門前手牌
-    hand: Vec<Pai>,
+    pub(crate) hand: Vec<Pai>,
     /// 副露
-    melds: Vec<Meld>,
+    pub(crate) melds: Vec<Meld>,
     /// 牌河
-    river: Vec<DiscardRecord>,
+    pub(crate) river: Vec<DiscardRecord>,
     /// 立直狀態
-    riichi: RiichiState,
+    pub(crate) riichi: RiichiState,
     /// 一發是否仍有效
-    ippatsu: bool,
+    pub(crate) ippatsu: bool,
     /// 第一巡：自己還沒打過牌，且還沒有任何人鳴牌（天和、地和、兩立直、九種九牌用）。
-    first_turn: bool,
+    pub(crate) first_turn: bool,
     /// 同巡振聽：放過了可以榮和的牌，到自己下次打牌前不能榮和。
-    temp_furiten: bool,
+    pub(crate) temp_furiten: bool,
     /// 立直振聽：立直後放過和牌，本局之後都不能榮和。
-    riichi_furiten: bool,
+    pub(crate) riichi_furiten: bool,
     /// 目前 13 張手牌的聽牌張（每次自己打牌後更新）；空 = 未聽牌。
-    waits: Vec<Tile>,
+    pub(crate) waits: Vec<Tile>,
     /// 食替限制：鳴牌後這一手不能打的牌種。
-    kuikae: Vec<Tile>,
+    pub(crate) kuikae: Vec<Tile>,
     /// 流局滿貫資格：打出的牌全是幺九牌且沒被鳴走。
-    nagashi: bool,
+    pub(crate) nagashi: bool,
     /// 包牌者：讓這位玩家完成大三元（第三組三元牌）或大四喜（第四組風牌）的放牌者。
-    pao: Option<Seat>,
+    pub(crate) pao: Option<Seat>,
 }
 
 impl PState {
     /// 門前手牌的牌數表。
-    fn counts(&self) -> TileCounts {
+    pub(crate) fn counts(&self) -> TileCounts {
         TileCounts::from_tiles(self.hand.iter().map(|p| p.tile))
     }
 
@@ -196,141 +261,36 @@ struct WinWay {
     chankan: bool,
 }
 
-/// 一局的進行狀態。
-pub(crate) struct Kyoku<'a, 'p> {
-    setup: &'a KyokuSetup,
-    cfg: &'a RiichiConfig,
-    table: &'a mut Table<'p>,
-    wall: Wall,
-    p: [PState; 4],
-    scores: [i32; 4],
+/// 一局的資料狀態（不含規則設定與牌桌）。可以複製，用於局面快照。
+#[derive(Clone)]
+pub(crate) struct KyokuState {
+    pub setup: KyokuSetup,
+    pub wall: Wall,
+    pub p: [PState; 4],
+    pub scores: [i32; 4],
     /// 場上的供託（立直棒）數
-    sticks: u8,
+    pub sticks: u8,
     /// 本局還沒有任何人鳴牌（含暗槓）
-    no_calls_yet: bool,
+    pub no_calls_yet: bool,
     /// 明槓、加槓的槓寶牌要等打牌後才翻開，這裡記錄待翻的張數
-    pending_dora: u8,
+    pub pending_dora: u8,
     /// 每次開槓的人（判斷四槓散了）
-    kan_owners: Vec<Seat>,
+    pub kan_owners: Vec<Seat>,
     /// 已從牌山摸出的張數（牌數守恆檢查用）
-    drawn_total: usize,
+    pub drawn_total: usize,
     /// 本局已打出的張數（四家合計），用來編 `DiscardRecord::seq`
-    discard_count: u16,
+    pub discard_count: u16,
 }
 
-/// 座位 `s` 往下家方向數 `k` 個的座位（1 = 下家、2 = 對家、3 = 上家）。
-fn seat_offset(s: Seat, k: u8) -> Seat {
-    (s + k) % 4
-}
-
-impl<'a, 'p> Kyoku<'a, 'p> {
-    pub fn new(
-        setup: &'a KyokuSetup,
-        cfg: &'a RiichiConfig,
-        wall: Wall,
-        table: &'a mut Table<'p>,
-    ) -> Self {
-        Kyoku {
-            setup,
-            cfg,
-            table,
-            wall,
-            p: Default::default(),
-            scores: setup.scores,
-            sticks: setup.riichi_sticks,
-            no_calls_yet: true,
-            pending_dora: 0,
-            kan_owners: Vec::new(),
-            drawn_total: 0,
-            discard_count: 0,
-        }
-    }
-
-    /// 莊家座位。
-    fn dealer(&self) -> Seat {
-        self.setup.kyoku % 4
-    }
-
-    /// 門風：0 = 東（莊家）.. 3 = 北。
-    fn seat_wind(&self, s: Seat) -> u8 {
-        (s + 4 - self.dealer()) % 4
-    }
-
-    /// 某座位的狀態。
-    fn ps(&self, s: Seat) -> &PState {
-        &self.p[usize::from(s)]
-    }
-
-    fn ps_mut(&mut self, s: Seat) -> &mut PState {
-        &mut self.p[usize::from(s)]
-    }
-
-    /// 進行這一局直到結束。
-    pub fn run(mut self) -> Result<KyokuOutcome, EngineError> {
-        let dealer = self.dealer();
-        // 配牌：從莊家開始每人 13 張。
-        for i in 0..4 {
-            let s = seat_offset(dealer, i);
-            for _ in 0..13 {
-                let pai = self.wall.draw().expect("wall holds the deal");
-                self.drawn_total += 1;
-                self.ps_mut(s).hand.push(pai);
-            }
-        }
-        for ps in &mut self.p {
-            ps.hand.sort();
-            ps.first_turn = true;
-            ps.nagashi = true;
-            ps.waits = waits(&ps.counts());
-        }
-        self.table.emit(Event::StartKyoku {
-            round_wind: self.setup.round_wind,
-            kyoku: self.setup.kyoku,
-            honba: self.setup.honba,
-            riichi_sticks: self.setup.riichi_sticks,
-            scores: self.scores,
-            dora_indicator: self.wall.dora_indicators()[0],
-            hands: std::array::from_fn(|s| self.p[s].hand.clone()),
-        });
-
-        // 莊家先摸牌，之後依 turn() 的結果輪轉。
-        let (mut seat, mut next) = (dealer, Next::Draw);
-        loop {
-            self.debug_check_conservation();
-            match self.turn(seat, next)? {
-                Step::Continue(s, n) => (seat, next) = (s, n),
-                Step::End(out) => return Ok(out),
-            }
-        }
-    }
-
-    /// 守恆檢查（只在除錯建置）：
-    /// - 牌數：手牌＋副露＋牌河中沒被鳴走的牌 = 已摸出的張數；
-    /// - 點數：四家點數＋供託 = 開局時的總和。
-    fn debug_check_conservation(&self) {
-        if cfg!(debug_assertions) {
-            let held: usize = self
-                .p
-                .iter()
-                .map(|ps| {
-                    ps.hand.len()
-                        + ps.melds.iter().map(|m| m.tiles.len()).sum::<usize>()
-                        + ps.river.iter().filter(|d| !d.called).count()
-                })
-                .sum();
-            assert_eq!(held, self.drawn_total, "tile conservation violated");
-            let total: i32 = self.scores.iter().sum::<i32>() + 1000 * i32::from(self.sticks);
-            let start: i32 =
-                self.setup.scores.iter().sum::<i32>() + 1000 * i32::from(self.setup.riichi_sticks);
-            assert_eq!(total, start, "point conservation violated");
-        }
-    }
-
-    // ---------------------------------------------------------------- 玩家視角
-
+impl KyokuState {
     /// 建立某座位看得到的資訊。
-    fn view(&self, me: Seat, drawn: Option<Pai>, last_discard: Option<(Seat, Pai)>) -> PlayerView {
-        let ps = self.ps(me);
+    pub(crate) fn view(
+        &self,
+        me: Seat,
+        drawn: Option<Pai>,
+        last_discard: Option<(Seat, Pai)>,
+    ) -> PlayerView {
+        let ps = &self.p[usize::from(me)];
         let mut hand_pais = ps.hand.clone();
         hand_pais.sort();
         PlayerView {
@@ -352,6 +312,173 @@ impl<'a, 'p> Kyoku<'a, 'p> {
             last_discard,
         }
     }
+}
+
+/// 一局的進行：資料狀態＋規則設定＋牌桌。
+pub(crate) struct Kyoku<'a, 'p> {
+    st: KyokuState,
+    cfg: &'a RiichiConfig,
+    table: &'a mut Table<'p>,
+}
+
+/// 座位 `s` 往下家方向數 `k` 個的座位（1 = 下家、2 = 對家、3 = 上家）。
+fn seat_offset(s: Seat, k: u8) -> Seat {
+    (s + k) % 4
+}
+
+impl<'a, 'p> Kyoku<'a, 'p> {
+    pub fn new(
+        setup: KyokuSetup,
+        cfg: &'a RiichiConfig,
+        wall: Wall,
+        table: &'a mut Table<'p>,
+    ) -> Self {
+        let st = KyokuState {
+            scores: setup.scores,
+            sticks: setup.riichi_sticks,
+            setup,
+            wall,
+            p: Default::default(),
+            no_calls_yet: true,
+            pending_dora: 0,
+            kan_owners: Vec::new(),
+            drawn_total: 0,
+            discard_count: 0,
+        };
+        Kyoku { st, cfg, table }
+    }
+
+    /// 莊家座位。
+    fn dealer(&self) -> Seat {
+        self.st.setup.kyoku % 4
+    }
+
+    /// 門風：0 = 東（莊家）.. 3 = 北。
+    fn seat_wind(&self, s: Seat) -> u8 {
+        (s + 4 - self.dealer()) % 4
+    }
+
+    /// 某座位的狀態。
+    fn ps(&self, s: Seat) -> &PState {
+        &self.st.p[usize::from(s)]
+    }
+
+    fn ps_mut(&mut self, s: Seat) -> &mut PState {
+        &mut self.st.p[usize::from(s)]
+    }
+
+    /// 進行這一局直到結束。
+    pub fn run(mut self) -> Result<KyokuOutcome, Halt> {
+        let dealer = self.dealer();
+        // 配牌：從莊家開始每人 13 張。
+        for i in 0..4 {
+            let s = seat_offset(dealer, i);
+            for _ in 0..13 {
+                let pai = self.st.wall.draw().expect("wall holds the deal");
+                self.st.drawn_total += 1;
+                self.ps_mut(s).hand.push(pai);
+            }
+        }
+        for ps in &mut self.st.p {
+            ps.hand.sort();
+            ps.first_turn = true;
+            ps.nagashi = true;
+            ps.waits = waits(&ps.counts());
+        }
+        self.table.emit(Event::StartKyoku {
+            round_wind: self.st.setup.round_wind,
+            kyoku: self.st.setup.kyoku,
+            honba: self.st.setup.honba,
+            riichi_sticks: self.st.setup.riichi_sticks,
+            scores: self.st.scores,
+            dora_indicator: self.st.wall.dora_indicators()[0],
+            hands: std::array::from_fn(|s| self.st.p[s].hand.clone()),
+        });
+
+        // 莊家先摸牌，之後依 turn() 的結果輪轉。
+        self.play_from(Step::Continue(dealer, Next::Draw))
+    }
+
+    /// 從快照的局面與詢問點繼續這一局。
+    pub fn resume(
+        st: KyokuState,
+        cfg: &'a RiichiConfig,
+        table: &'a mut Table<'p>,
+        at: Resume,
+    ) -> Result<KyokuOutcome, Halt> {
+        let mut k = Kyoku { st, cfg, table };
+        let step = match at {
+            Resume::OwnTurn {
+                seat,
+                drawn,
+                rinshan,
+                after_call,
+            } => k.own_turn(seat, drawn, rinshan, after_call)?,
+            Resume::Response {
+                discarder,
+                pai,
+                riichi,
+                double,
+                k: start,
+                rons,
+                call,
+                chi,
+            } => k.responses(discarder, pai, riichi, double, start, rons, call, chi)?,
+        };
+        k.play_from(step)
+    }
+
+    /// 依回合結果一直進行，直到這一局結束。
+    fn play_from(mut self, mut step: Step) -> Result<KyokuOutcome, Halt> {
+        loop {
+            match step {
+                Step::Continue(seat, next) => {
+                    self.debug_check_conservation();
+                    step = self.turn(seat, next)?;
+                }
+                Step::End(out) => return Ok(out),
+            }
+        }
+    }
+
+    /// 保存目前的局面，停止這一局（到達快照目標）。
+    fn capture(&self, at: Resume) -> Halt {
+        Halt::Snapshot(Box::new(crate::snapshot::Snapshot {
+            state: self.st.clone(),
+            resume: at,
+            red_fives: self.cfg.red_fives,
+        }))
+    }
+
+    /// 守恆檢查（只在除錯建置）：
+    /// - 牌數：手牌＋副露＋牌河中沒被鳴走的牌 = 已摸出的張數；
+    /// - 點數：四家點數＋供託 = 開局時的總和。
+    fn debug_check_conservation(&self) {
+        if cfg!(debug_assertions) {
+            let held: usize = self
+                .st
+                .p
+                .iter()
+                .map(|ps| {
+                    ps.hand.len()
+                        + ps.melds.iter().map(|m| m.tiles.len()).sum::<usize>()
+                        + ps.river.iter().filter(|d| !d.called).count()
+                })
+                .sum();
+            assert_eq!(held, self.st.drawn_total, "tile conservation violated");
+            let total: i32 = self.st.scores.iter().sum::<i32>() + 1000 * i32::from(self.st.sticks);
+            let start: i32 = self.st.setup.scores.iter().sum::<i32>()
+                + 1000 * i32::from(self.st.setup.riichi_sticks);
+            assert_eq!(total, start, "point conservation violated");
+        }
+    }
+
+    // ---------------------------------------------------------------- 玩家視角
+
+    /// 建立某座位看得到的資訊。
+    fn view(&self, me: Seat, drawn: Option<Pai>, last_discard: Option<(Seat, Pai)>) -> PlayerView {
+        self.st.view(me, drawn, last_discard)
+    }
 
     // ---------------------------------------------------------------- 計分輔助
 
@@ -359,19 +486,19 @@ impl<'a, 'p> Kyoku<'a, 'p> {
     fn win_context(&self, s: Seat, win: Tile, way: WinWay) -> WinContext {
         let ps = self.ps(s);
         let mut ctx = WinContext::new(win, way.tsumo);
-        let last = self.wall.remaining() == 0;
+        let last = self.st.wall.remaining() == 0;
         ctx.riichi = ps.riichi;
         ctx.ippatsu = ps.ippatsu;
         ctx.haitei = way.tsumo && last && !way.rinshan;
         ctx.houtei = !way.tsumo && last && !way.chankan;
         ctx.rinshan = way.rinshan;
         ctx.chankan = way.chankan;
-        ctx.first_draw = way.tsumo && ps.first_turn && self.no_calls_yet;
+        ctx.first_draw = way.tsumo && ps.first_turn && self.st.no_calls_yet;
         ctx.dealer = s == self.dealer();
         ctx.seat_wind = self.seat_wind(s);
-        ctx.round_wind = self.setup.round_wind;
-        ctx.dora_indicators = self.wall.dora_indicators();
-        ctx.ura_indicators = self.wall.ura_indicators();
+        ctx.round_wind = self.st.setup.round_wind;
+        ctx.dora_indicators = self.st.wall.dora_indicators();
+        ctx.ura_indicators = self.st.wall.ura_indicators();
         ctx
     }
 
@@ -394,21 +521,21 @@ impl<'a, 'p> Kyoku<'a, 'p> {
     // ---------------------------------------------------------------- 自己的回合
 
     /// 一個回合：摸牌（或不摸）→ 詢問玩家 → 執行動作。
-    fn turn(&mut self, seat: Seat, next: Next) -> Result<Step, EngineError> {
+    fn turn(&mut self, seat: Seat, next: Next) -> Result<Step, Halt> {
         let mut drawn = None;
         let mut rinshan = false;
         match next {
-            Next::Draw => match self.wall.draw() {
+            Next::Draw => match self.st.wall.draw() {
                 Some(pai) => {
-                    self.drawn_total += 1;
+                    self.st.drawn_total += 1;
                     drawn = Some(pai);
                 }
                 // 牌山摸完：荒牌流局。
                 None => return Ok(Step::End(self.exhaustive_draw())),
             },
             Next::Rinshan => {
-                drawn = Some(self.wall.draw_rinshan());
-                self.drawn_total += 1;
+                drawn = Some(self.st.wall.draw_rinshan());
+                self.st.drawn_total += 1;
                 rinshan = true;
             }
             Next::DiscardOnly => {}
@@ -422,7 +549,26 @@ impl<'a, 'p> Kyoku<'a, 'p> {
             });
         }
 
-        let legal = self.own_actions(seat, drawn, next == Next::DiscardOnly, rinshan);
+        self.own_turn(seat, drawn, rinshan, next == Next::DiscardOnly)
+    }
+
+    /// 自己回合的詢問與執行（摸牌之後；從快照繼續時從這裡開始）。
+    fn own_turn(
+        &mut self,
+        seat: Seat,
+        drawn: Option<Pai>,
+        rinshan: bool,
+        after_call: bool,
+    ) -> Result<Step, Halt> {
+        let legal = self.own_actions(seat, drawn, after_call, rinshan);
+        if self.table.snapshot_due(seat) {
+            return Err(self.capture(Resume::OwnTurn {
+                seat,
+                drawn,
+                rinshan,
+                after_call,
+            }));
+        }
         let view = self.view(seat, drawn, None);
         let action = self.table.ask(&view, legal)?;
         match action {
@@ -457,7 +603,7 @@ impl<'a, 'p> Kyoku<'a, 'p> {
         let counts = ps.counts();
         let mut out = Vec::new();
         // 開槓需要牌山還有牌（要補嶺上牌），且全局最多 4 槓。
-        let can_kan = !after_call && self.wall.remaining() > 0 && self.wall.kans() < 4;
+        let can_kan = !after_call && self.st.wall.remaining() > 0 && self.st.wall.kans() < 4;
         if let Some(pai) = drawn {
             if self
                 .try_score(
@@ -477,7 +623,7 @@ impl<'a, 'p> Kyoku<'a, 'p> {
             let yaochu_kinds = Tile::all()
                 .filter(|t| t.is_yaochu() && counts.get(*t) > 0)
                 .count();
-            if ps.first_turn && self.no_calls_yet && yaochu_kinds >= 9 {
+            if ps.first_turn && self.st.no_calls_yet && yaochu_kinds >= 9 {
                 out.push(Action::KyuushuKyuuhai);
             }
         }
@@ -528,8 +674,8 @@ impl<'a, 'p> Kyoku<'a, 'p> {
         let discards = self.discard_options(seat, drawn);
         let can_riichi = !after_call
             && ps.closed()
-            && self.scores[usize::from(seat)] >= 1000
-            && self.wall.remaining() >= 4;
+            && self.st.scores[usize::from(seat)] >= 1000
+            && self.st.wall.remaining() >= 4;
         for &(pai, tsumogiri) in &discards {
             out.push(Action::Discard { pai, tsumogiri });
             if can_riichi {
@@ -569,15 +715,15 @@ impl<'a, 'p> Kyoku<'a, 'p> {
 
     /// 有人鳴牌（含暗槓）：所有人的一發與第一巡狀態都消失。
     fn break_ippatsu_and_first_turn(&mut self) {
-        for ps in &mut self.p {
+        for ps in &mut self.st.p {
             ps.ippatsu = false;
             ps.first_turn = false;
         }
-        self.no_calls_yet = false;
+        self.st.no_calls_yet = false;
     }
 
     /// 暗槓：公開四張 → 國士無雙可以搶暗槓 → 立刻翻槓寶牌 → 摸嶺上牌。
-    fn ankan(&mut self, seat: Seat, tile: Tile) -> Result<Step, EngineError> {
+    fn ankan(&mut self, seat: Seat, tile: Tile) -> Result<Step, Halt> {
         let ps = self.ps_mut(seat);
         let tiles: Vec<Pai> = ps.hand.iter().copied().filter(|p| p.tile == tile).collect();
         ps.hand.retain(|p| p.tile != tile);
@@ -588,7 +734,7 @@ impl<'a, 'p> Kyoku<'a, 'p> {
             from: None,
         };
         ps.melds.push(meld.clone());
-        self.kan_owners.push(seat);
+        self.st.kan_owners.push(seat);
         self.break_ippatsu_and_first_turn();
         self.table.emit(Event::Call { seat, meld });
         // 只有國士無雙可以搶暗槓。
@@ -596,15 +742,15 @@ impl<'a, 'p> Kyoku<'a, 'p> {
         if let Some(step) = self.offer_chankan(seat, pai, true)? {
             return Ok(step);
         }
-        self.wall.reveal_dora();
+        self.st.wall.reveal_dora();
         self.table.emit(Event::Dora {
-            indicator: *self.wall.dora_indicators().last().unwrap(),
+            indicator: *self.st.wall.dora_indicators().last().unwrap(),
         });
         Ok(Step::Continue(seat, Next::Rinshan))
     }
 
     /// 加槓：先讓其他人搶槓 → 沒人搶就把碰改成加槓 → 槓寶牌等打牌後翻 → 摸嶺上牌。
-    fn kakan(&mut self, seat: Seat, pai: Pai) -> Result<Step, EngineError> {
+    fn kakan(&mut self, seat: Seat, pai: Pai) -> Result<Step, Halt> {
         if let Some(step) = self.offer_chankan(seat, pai, false)? {
             return Ok(step);
         }
@@ -618,8 +764,8 @@ impl<'a, 'p> Kyoku<'a, 'p> {
         m.kind = MeldKind::Kakan;
         m.tiles.push(pai);
         let meld = m.clone();
-        self.kan_owners.push(seat);
-        self.pending_dora += 1;
+        self.st.kan_owners.push(seat);
+        self.st.pending_dora += 1;
         self.break_ippatsu_and_first_turn();
         self.table.emit(Event::Call { seat, meld });
         Ok(Step::Continue(seat, Next::Rinshan))
@@ -632,7 +778,7 @@ impl<'a, 'p> Kyoku<'a, 'p> {
         kanner: Seat,
         pai: Pai,
         kokushi_only: bool,
-    ) -> Result<Option<Step>, EngineError> {
+    ) -> Result<Option<Step>, Halt> {
         let way = WinWay {
             tsumo: false,
             rinshan: false,
@@ -649,6 +795,9 @@ impl<'a, 'p> Kyoku<'a, 'p> {
             c.add(pai.tile);
             let shape_ok = !kokushi_only || is_kokushi(&c);
             if shape_ok && !ps.furiten() && self.try_score(s, pai, way).is_some() {
+                if self.table.snapshot_due(s) {
+                    return Err(Halt::Unsupported);
+                }
                 let view = self.view(s, None, Some((kanner, pai)));
                 if self.table.ask(&view, vec![Action::Ron, Action::Pass])? == Action::Ron {
                     rons.push(s);
@@ -690,9 +839,9 @@ impl<'a, 'p> Kyoku<'a, 'p> {
         pai: Pai,
         tsumogiri: bool,
         riichi: bool,
-    ) -> Result<Step, EngineError> {
+    ) -> Result<Step, Halt> {
         // 第一巡、無人鳴牌時立直 = 兩立直。
-        let double = riichi && self.ps(seat).first_turn && self.no_calls_yet;
+        let double = riichi && self.ps(seat).first_turn && self.st.no_calls_yet;
         let ps = self.ps_mut(seat);
         ps.take(pai);
         ps.hand.sort();
@@ -705,8 +854,8 @@ impl<'a, 'p> Kyoku<'a, 'p> {
         ps.first_turn = false;
         ps.nagashi &= pai.tile.is_yaochu();
         ps.waits = waits(&ps.counts());
-        let seq = self.discard_count;
-        self.discard_count += 1;
+        let seq = self.st.discard_count;
+        self.st.discard_count += 1;
         let ps = self.ps_mut(seat);
         ps.river.push(DiscardRecord {
             pai,
@@ -722,27 +871,52 @@ impl<'a, 'p> Kyoku<'a, 'p> {
             riichi,
         });
         // 明槓、加槓的槓寶牌在打牌後翻開（榮和這張牌時也算新寶牌）。
-        while self.pending_dora > 0 {
-            self.pending_dora -= 1;
-            self.wall.reveal_dora();
+        while self.st.pending_dora > 0 {
+            self.st.pending_dora -= 1;
+            self.st.wall.reveal_dora();
             self.table.emit(Event::Dora {
-                indicator: *self.wall.dora_indicators().last().unwrap(),
+                indicator: *self.st.wall.dora_indicators().last().unwrap(),
             });
         }
 
-        // 依下家、對家、上家的順序詢問：任何人都可以榮和；牌山還有牌時才能吃碰槓。
+        self.responses(seat, pai, riichi, double, 1, Vec::new(), None, None)
+    }
+
+    /// 打牌後的回應階段：依下家、對家、上家的順序（從第 `start` 個開始）詢問。
+    /// 任何人都可以榮和；牌山還有牌時才能吃碰槓。之後處理立直成立、途中流局與鳴牌。
+    #[allow(clippy::too_many_arguments)]
+    fn responses(
+        &mut self,
+        seat: Seat,
+        pai: Pai,
+        riichi: bool,
+        double: bool,
+        start: u8,
+        mut rons: Vec<Seat>,
+        mut call: Option<(Seat, Action)>,
+        mut chi: Option<(Seat, Action)>,
+    ) -> Result<Step, Halt> {
         let way = WinWay {
             tsumo: false,
             rinshan: false,
             chankan: false,
         };
-        let mut rons = Vec::new();
-        let mut call: Option<(Seat, Action)> = None;
-        let mut chi: Option<(Seat, Action)> = None;
-        for k in 1..4 {
+        for k in start..4 {
             let s = seat_offset(seat, k);
             let legal = self.response_actions(s, seat, pai);
             let action = if legal.len() > 1 {
+                if self.table.snapshot_due(s) {
+                    return Err(self.capture(Resume::Response {
+                        discarder: seat,
+                        pai,
+                        riichi,
+                        double,
+                        k,
+                        rons,
+                        call,
+                        chi,
+                    }));
+                }
                 let view = self.view(s, None, Some((seat, pai)));
                 self.table.ask(&view, legal)?
             } else {
@@ -772,22 +946,28 @@ impl<'a, 'p> Kyoku<'a, 'p> {
                 RiichiState::Riichi
             };
             ps.ippatsu = true;
-            self.scores[usize::from(seat)] -= 1000;
-            self.sticks += 1;
+            self.st.scores[usize::from(seat)] -= 1000;
+            self.st.sticks += 1;
             self.table.emit(Event::RiichiAccepted { seat });
-            if self.p.iter().all(|p| p.riichi != RiichiState::None) {
+            if self.st.p.iter().all(|p| p.riichi != RiichiState::None) {
                 return Ok(Step::End(self.abort(DrawReason::SuuchaRiichi)));
             }
         }
         // 四風連打：第一巡無人鳴牌，四家第一張都打同一種風牌。
-        if self.no_calls_yet && self.p.iter().all(|p| p.river.len() == 1) {
-            let first = self.p[0].river[0].pai.tile;
-            if first.is_wind() && self.p.iter().all(|p| p.river[0].pai.tile == first) {
+        if self.st.no_calls_yet && self.st.p.iter().all(|p| p.river.len() == 1) {
+            let first = self.st.p[0].river[0].pai.tile;
+            if first.is_wind() && self.st.p.iter().all(|p| p.river[0].pai.tile == first) {
                 return Ok(Step::End(self.abort(DrawReason::SuufonRenda)));
             }
         }
         // 四槓散了：開了第四槓且不是同一人開的（同一人四槓還可能做四槓子）。
-        if self.wall.kans() == 4 && self.kan_owners.iter().any(|&o| o != self.kan_owners[0]) {
+        if self.st.wall.kans() == 4
+            && self
+                .st
+                .kan_owners
+                .iter()
+                .any(|&o| o != self.st.kan_owners[0])
+        {
             return Ok(Step::End(self.abort(DrawReason::Suukaikan)));
         }
 
@@ -811,7 +991,7 @@ impl<'a, 'p> Kyoku<'a, 'p> {
         if ps.waits.contains(&pai.tile) && !ps.furiten() && self.try_score(s, pai, way).is_some() {
             out.push(Action::Ron);
         }
-        if self.wall.remaining() > 0 && ps.riichi == RiichiState::None {
+        if self.st.wall.remaining() > 0 && ps.riichi == RiichiState::None {
             let same: Vec<Pai> = ps
                 .hand
                 .iter()
@@ -833,7 +1013,7 @@ impl<'a, 'p> Kyoku<'a, 'p> {
                     }
                 }
             }
-            if same.len() == 3 && self.wall.kans() < 4 {
+            if same.len() == 3 && self.st.wall.kans() < 4 {
                 out.push(Action::Daiminkan);
             }
             // 吃：只有下家可以吃，列出所有能組成順子的手牌組合。
@@ -930,8 +1110,8 @@ impl<'a, 'p> Kyoku<'a, 'p> {
         self.table.emit(Event::Call { seat: s, meld });
         // 大明槓：槓寶牌在打牌後翻開，接著摸嶺上牌；吃碰則直接打牌。
         if kind == MeldKind::Daiminkan {
-            self.kan_owners.push(s);
-            self.pending_dora += 1;
+            self.st.kan_owners.push(s);
+            self.st.pending_dora += 1;
             Step::Continue(s, Next::Rinshan)
         } else {
             Step::Continue(s, Next::DiscardOnly)
@@ -942,7 +1122,7 @@ impl<'a, 'p> Kyoku<'a, 'p> {
 
     /// 和牌結算。`winners` 依離放銃者由近到遠排列（雙響時兩人）；自摸時 `from` = 和牌者。
     fn settle_wins(&mut self, winners: &[Seat], from: Seat, pai: Pai, way: WinWay) -> KyokuOutcome {
-        let honba = self.setup.honba;
+        let honba = self.st.setup.honba;
         for (i, &w) in winners.iter().enumerate() {
             let sc = self
                 .try_score(w, pai, way)
@@ -983,10 +1163,10 @@ impl<'a, 'p> Kyoku<'a, 'p> {
             let paid: i32 = -deltas.iter().sum::<i32>();
             deltas[usize::from(w)] += paid;
             if i == 0 {
-                deltas[usize::from(w)] += 1000 * i32::from(self.sticks);
-                self.sticks = 0;
+                deltas[usize::from(w)] += 1000 * i32::from(self.st.sticks);
+                self.st.sticks = 0;
             }
-            for (score, d) in self.scores.iter_mut().zip(deltas) {
+            for (score, d) in self.st.scores.iter_mut().zip(deltas) {
                 *score += d;
             }
             let mut hand = self.ps(w).hand.clone();
@@ -995,7 +1175,7 @@ impl<'a, 'p> Kyoku<'a, 'p> {
             }
             hand.sort();
             let ura = if self.ps(w).riichi != RiichiState::None {
-                self.wall.ura_indicators()
+                self.st.wall.ura_indicators()
             } else {
                 Vec::new()
             };
@@ -1016,7 +1196,7 @@ impl<'a, 'p> Kyoku<'a, 'p> {
 
     /// 四家是否聽牌（看牌型，不管有沒有役）。
     fn tenpai(&self) -> [bool; 4] {
-        std::array::from_fn(|s| !self.p[s].waits.is_empty())
+        std::array::from_fn(|s| !self.st.p[s].waits.is_empty())
     }
 
     /// 荒牌流局：有流局滿貫就付滿貫，否則依聽牌人數付不聽罰符（共 3000 點）。
@@ -1048,7 +1228,7 @@ impl<'a, 'p> Kyoku<'a, 'p> {
                 }
             }
         }
-        for (score, d) in self.scores.iter_mut().zip(deltas) {
+        for (score, d) in self.st.scores.iter_mut().zip(deltas) {
             *score += d;
         }
         self.table.emit(Event::HandEnd {
@@ -1080,11 +1260,11 @@ impl<'a, 'p> Kyoku<'a, 'p> {
     fn finish(&mut self, winners: Vec<Seat>, dealer_continues: bool) -> KyokuOutcome {
         self.debug_check_conservation();
         self.table.emit(Event::EndKyoku {
-            scores: self.scores,
+            scores: self.st.scores,
         });
         KyokuOutcome {
-            scores: self.scores,
-            riichi_sticks: self.sticks,
+            scores: self.st.scores,
+            riichi_sticks: self.st.sticks,
             winners,
             dealer_continues,
         }

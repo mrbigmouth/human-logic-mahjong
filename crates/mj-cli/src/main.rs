@@ -4,6 +4,7 @@ mod evaluate;
 mod nanikiru;
 mod predict_eval;
 mod selfplay;
+mod simulate;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -78,20 +79,38 @@ enum Command {
         /// 每場對局抽樣幾個決策點來評估
         #[arg(long, default_value_t = 20)]
         samples: usize,
-        /// 每個選項重打幾次（牌山未摸的部分每次重新洗牌）
-        #[arg(long, default_value_t = 24)]
+        /// 每個選項最少重打幾次（每次是一個重抽過看不到的牌的「可能世界」）
+        #[arg(long, default_value_t = 16)]
         rollouts: usize,
-        /// 列出損失最大的前幾個決策
+        /// 差距不顯著時，重打次數最多增加到多少
+        #[arg(long, default_value_t = 64)]
+        max_rollouts: usize,
+        /// 衡量方式：placement（名次點，打到整場結束）或 points（這一局的點數）
+        #[arg(long, default_value = "placement")]
+        metric: String,
+        /// 使用真實的對手手牌（全知），不重抽；用來和預設的重抽方式比較
+        #[arg(long)]
+        omniscient: bool,
+        /// 把評估結果寫成 JSON 檔
+        #[arg(long)]
+        json: Option<PathBuf>,
+        /// 只評估這些決策種類，以逗號分隔：kyuushu,win,kan,discard,riichi,call（預設全部）
+        #[arg(long, default_value = "")]
+        kinds: String,
+        /// 列出損失最大的前幾個（顯著的）決策
         #[arg(long, default_value_t = 5)]
         worst: usize,
     },
-    /// 策略之間的 duplicate 對戰（M3）
+    /// duplicate 對戰：同一組牌山輪換座位，比較 2 個（各坐兩個位置）或 4 個參賽者
     Simulate {
-        /// 參與對戰的策略名稱
-        strategies: Vec<String>,
-        /// 對局數
-        #[arg(long, default_value_t = 1000)]
-        games: u32,
+        /// 參賽者：策略名稱、greedy 或 random（2 或 4 個；同名兩次即 A/A 測試）
+        entrants: Vec<String>,
+        /// 組數（每組 4 場）
+        #[arg(long, default_value_t = 500)]
+        blocks: u64,
+        /// 起始 seed
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
     },
     /// 用策略復盤一份牌譜（M7）
     Review { log: PathBuf, strategy: String },
@@ -145,23 +164,75 @@ fn main() -> ExitCode {
             seed,
             samples,
             rollouts,
+            max_rollouts,
+            metric,
+            omniscient,
+            json,
+            kinds,
             worst,
         } => {
+            let kinds: Vec<mj_strategy::framework::DecisionKind> = match kinds
+                .split(',')
+                .filter(|k| !k.trim().is_empty())
+                .map(|k| parse_kind(k.trim()))
+                .collect::<Result<_, _>>()
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("{e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let metric = match metric.as_str() {
+                "placement" => mj_sim::counterfactual::Metric::Placement,
+                "points" => mj_sim::counterfactual::Metric::Points,
+                other => {
+                    eprintln!("未知的衡量方式 {other}（可用 placement 或 points）");
+                    return ExitCode::FAILURE;
+                }
+            };
             return exit(evaluate::run(&evaluate::Options {
                 strategy: &strategy,
                 games,
                 seed,
                 samples,
                 rollouts,
+                max_rollouts,
+                metric,
+                omniscient,
                 worst,
+                json,
+                kinds,
             }));
         }
-        Command::Simulate { .. } => "M3",
+        Command::Simulate {
+            entrants,
+            blocks,
+            seed,
+        } => return exit(simulate::run(&entrants, blocks, seed)),
         Command::Review { .. } => "M7",
         Command::Play { .. } | Command::Serve { .. } => "M9",
     };
     eprintln!("尚未實作（預計在 {milestone} 完成，見 docs/04-milestones.md）");
     ExitCode::FAILURE
+}
+
+/// 解析決策種類名稱。
+fn parse_kind(s: &str) -> Result<mj_strategy::framework::DecisionKind, String> {
+    use mj_strategy::framework::DecisionKind::*;
+    Ok(match s {
+        "kyuushu" => Kyuushu,
+        "win" => Win,
+        "kan" => Kan,
+        "discard" => Discard,
+        "riichi" => Riichi,
+        "call" => Call,
+        other => {
+            return Err(format!(
+                "未知的決策種類 {other}（可用 kyuushu, win, kan, discard, riichi, call）"
+            ));
+        }
+    })
 }
 
 /// 把結果轉成結束碼，錯誤訊息印到 stderr。

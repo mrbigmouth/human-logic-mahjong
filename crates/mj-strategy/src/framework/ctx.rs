@@ -7,7 +7,7 @@
 //! - `claim()`：記錄預測，供預測準確度評估
 
 use super::choice::{CallChoice, DecisionKind, KanChoice, WinKind};
-use super::claim::{Claim, ClaimRecord};
+use super::claim::{Claim, ClaimRecord, TargetSituation};
 use mj_core::{Pai, Tile, TileCounts};
 use mj_engine::{Action, PlayerView, Seat};
 use mj_tools::RemainingEstimate;
@@ -173,11 +173,18 @@ impl<'a> Ctx<'a> {
 
     /// 記錄一個預測。`source` = 預測函式的名稱，例如 `"predict::tenpai"`。
     pub fn claim(&self, source: &str, claim: Claim) {
+        let t = usize::from(claim.target().unwrap_or(self.view.me));
+        let target = TargetSituation {
+            turn: self.view.rivers[t].len() as u8,
+            open_melds: self.view.melds[t].iter().filter(|m| m.is_open()).count() as u8,
+            riichi: self.view.riichi[t],
+        };
         self.claims.borrow_mut().push(ClaimRecord {
             source: source.to_string(),
             claim,
             me: self.view.me,
             at_event: self.event_index,
+            target,
         });
     }
 

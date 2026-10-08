@@ -9,7 +9,7 @@
 use crate::replay::{furiten_at, hand_winners_after, hands_at};
 use mj_engine::{Event, GameConfig, Player, run_game_with};
 use mj_rules::riichi::RiichiConfig;
-use mj_strategy::framework::{Claim, ClaimRecord, Strategy};
+use mj_strategy::framework::{Claim, ClaimRecord, Strategy, TargetSituation};
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -22,6 +22,69 @@ pub struct Judged {
     pub p: f64,
     /// 真相：1 = 發生，0 = 沒有
     pub truth: bool,
+    /// 被預測者當時的情境
+    pub target: TargetSituation,
+}
+
+/// 預測的分組方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dimension {
+    /// 被預測者的巡目
+    Turn,
+    /// 被預測者的副露組數
+    Melds,
+    /// 被預測者是否已立直
+    Riichi,
+}
+
+impl Dimension {
+    pub const ALL: [Dimension; 3] = [Dimension::Turn, Dimension::Melds, Dimension::Riichi];
+
+    /// 中文名稱。
+    pub fn name(self) -> &'static str {
+        match self {
+            Dimension::Turn => "巡目",
+            Dimension::Melds => "副露",
+            Dimension::Riichi => "立直",
+        }
+    }
+
+    /// 一筆預測屬於哪一組（組名）。
+    pub fn bucket(self, j: &Judged) -> String {
+        let t = &j.target;
+        match self {
+            Dimension::Turn => match t.turn {
+                0..=5 => "序盤（0–5）".into(),
+                6..=11 => "中盤（6–11）".into(),
+                _ => "終盤（12+）".into(),
+            },
+            Dimension::Melds => format!("{} 組", t.open_melds.min(3)),
+            Dimension::Riichi => {
+                if t.riichi {
+                    "已立直".into()
+                } else {
+                    "未立直".into()
+                }
+            }
+        }
+    }
+}
+
+/// 某個預測函式依情境分組的指標。
+pub fn by_dimension(
+    judged: &[Judged],
+    source: &str,
+    category: &str,
+    dim: Dimension,
+) -> Vec<(String, Metrics)> {
+    let mut groups: BTreeMap<String, Vec<&Judged>> = BTreeMap::new();
+    for j in judged
+        .iter()
+        .filter(|j| j.source == source && j.category == category)
+    {
+        groups.entry(dim.bucket(j)).or_default().push(j);
+    }
+    groups.into_iter().map(|(k, v)| (k, metrics(&v))).collect()
 }
 
 /// 用全知視角判定一筆預測的真相。無法判定時回傳 `None`。
@@ -136,6 +199,7 @@ pub fn collect(strategy: Arc<dyn Strategy>, games: u64, seed: u64) -> Result<Vec
                             category: c.claim.category(),
                             p: c.claim.p(),
                             truth,
+                            target: c.target,
                         });
                     }
                 }

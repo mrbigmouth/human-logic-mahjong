@@ -5,7 +5,7 @@
 //! `crate::strategy_list::tenhou_normal_4p_hanchan::decision::discard`。
 //!
 //! 每個策略目錄必須有 `main.rs`（`pub fn register(book: &mut Book<Memory>)`）
-//! 與 `memory.rs`（`pub struct Memory`，需實作 `Default`）。
+//! 與 `memory.rs`（`pub struct Memory`，需實作 `Default` 與 `Clone`）。
 
 use std::fmt::Write;
 use std::fs;

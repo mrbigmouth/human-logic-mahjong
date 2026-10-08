@@ -1,6 +1,6 @@
 //! `mj predict-eval`：預測準確度評估（與勝負無關，只看預測對不對）。
 
-use mj_sim::predict_eval::{collect, summarize};
+use mj_sim::predict_eval::{Dimension, by_dimension, collect, summarize};
 use mj_strategy::find_strategy;
 use mj_strategy::framework::explain::{pad, pad_left};
 use std::sync::Arc;
@@ -41,6 +41,31 @@ pub fn run(strategy: &str, games: u64, seed: u64) -> Result<(), String> {
     }
     println!();
     println!("技巧分數 = 1 − Brier ÷ 基準 Brier（基準 = 永遠猜平均發生率）；> 0 代表比基準好。");
+    for (source, category) in groups.keys() {
+        for dim in Dimension::ALL {
+            println!();
+            println!(
+                "{}{}{}{}{}{}",
+                pad(&format!("{source}×{}", dim.name()), 28),
+                pad_left("筆數", 9),
+                pad_left("平均預測", 10),
+                pad_left("實際發生率", 12),
+                pad_left("Brier", 9),
+                pad_left("技巧分數", 10)
+            );
+            for (label, m) in by_dimension(&judged, source, category, dim) {
+                println!(
+                    "{}{}{}{}{}{}",
+                    pad(&format!("  {label}"), 28),
+                    pad_left(&m.n.to_string(), 9),
+                    pad_left(&format!("{:.3}", m.mean_p), 10),
+                    pad_left(&format!("{:.3}", m.base_rate), 12),
+                    pad_left(&format!("{:.4}", m.brier), 9),
+                    pad_left(&format!("{:+.3}", m.skill), 10)
+                );
+            }
+        }
+    }
     for ((source, category), m) in &groups {
         println!();
         println!("校準表：{source}（{category}）  對數損失 {:.4}", m.log_loss);

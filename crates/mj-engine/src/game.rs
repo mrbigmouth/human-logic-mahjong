@@ -6,8 +6,10 @@
 //! - 判斷是否結束：擊飛、最終局（南四）以後有人達到返點、西入的最後一局。
 
 use crate::Player;
+use crate::Seat;
 use crate::event::Event;
-use crate::kyoku::{EngineError, Kyoku, KyokuSetup, Table};
+use crate::kyoku::{EngineError, Halt, Kyoku, KyokuSetup, Table};
+use crate::snapshot::Snapshot;
 use crate::wall::{Wall, hand_seed};
 use mj_core::Pai;
 use mj_rules::riichi::RiichiConfig;
@@ -72,43 +74,123 @@ pub fn run_game_with(
     players: [&mut dyn Player; 4],
     keep_log: bool,
 ) -> Result<GameResult, EngineError> {
+    let mut table = Table::new(players, keep_log, None);
+    match play(cfg, &mut table, Start::Fresh) {
+        Ok(r) => Ok(r),
+        Err(Halt::Error(e)) => Err(e),
+        Err(Halt::Snapshot(_) | Halt::Unsupported) => unreachable!("no snapshot target was set"),
+    }
+}
+
+/// 重播一場對局，在「即將第 `ask_index` 次詢問座位 `seat`」時保存局面並停止。
+/// 玩家的狀態（例如對局記憶）停在詢問之前，呼叫端可以接著複製這些玩家來繼續打。
+/// 對局在那之前就結束，或詢問點落在不支援繼續的位置（搶槓）時回傳 `None`。
+pub fn capture_snapshot(
+    cfg: &GameConfig,
+    players: [&mut dyn Player; 4],
+    seat: Seat,
+    ask_index: u32,
+) -> Result<Option<Snapshot>, EngineError> {
+    let mut table = Table::new(players, false, Some((seat, ask_index)));
+    match play(cfg, &mut table, Start::Fresh) {
+        Ok(_) | Err(Halt::Unsupported) => Ok(None),
+        Err(Halt::Snapshot(s)) => Ok(Some(*s)),
+        Err(Halt::Error(e)) => Err(e),
+    }
+}
+
+/// 從快照繼續要打到哪裡。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Until {
+    /// 打完這一局就停止（結果的點數不含整場結束時的供託分配）
+    HandEnd,
+    /// 打完整場對局（之後的牌山由 `cfg.seed` 決定）
+    GameEnd,
+}
+
+/// 從快照繼續打。玩家應該是保存快照時玩家狀態的複本（詢問次數、記憶都要接得上）。
+/// 回傳的 `log` 只包含快照之後的事件。
+pub fn resume_game(
+    cfg: &GameConfig,
+    snapshot: &Snapshot,
+    players: [&mut dyn Player; 4],
+    keep_log: bool,
+    until: Until,
+) -> Result<GameResult, EngineError> {
+    let mut table = Table::new(players, keep_log, None);
+    match play(cfg, &mut table, Start::Resume(snapshot, until)) {
+        Ok(r) => Ok(r),
+        Err(Halt::Error(e)) => Err(e),
+        Err(Halt::Snapshot(_) | Halt::Unsupported) => unreachable!("no snapshot target was set"),
+    }
+}
+
+/// 對局從哪裡開始。
+enum Start<'s> {
+    /// 新的一場
+    Fresh,
+    /// 從快照繼續
+    Resume(&'s Snapshot, Until),
+}
+
+/// 對局主迴圈。
+fn play(cfg: &GameConfig, table: &mut Table, start: Start) -> Result<GameResult, Halt> {
     let rules = &cfg.rules;
+    let keep_log = table.log.is_some();
     let mut walls = Vec::new();
-    let mut table = Table {
-        players,
-        log: keep_log.then(Vec::new),
-    };
-    table.emit(Event::StartGame { seed: cfg.seed });
 
     // 正規局數：半莊 8 局（東 4 南 4），東風戰 4 局。
     let regular_hands: u8 = if rules.hanchan { 8 } else { 4 };
-    let mut scores = [rules.starting_points; 4];
     // index = 局序（0 = 東一、4 = 南一、8 = 西一）；honba = 本場；sticks = 供託。
-    let (mut index, mut honba, mut sticks) = (0u8, 0u8, 0u8);
-    let mut hands_played = 0u32;
+    let (mut scores, mut index, mut honba, mut sticks, mut hands_played);
+    let (mut pending, until) = match start {
+        Start::Fresh => {
+            table.emit(Event::StartGame { seed: cfg.seed });
+            (scores, index, honba, sticks, hands_played) =
+                ([rules.starting_points; 4], 0u8, 0u8, 0u8, 0u32);
+            (None, Until::GameEnd)
+        }
+        Start::Resume(snap, until) => {
+            let su = &snap.state.setup;
+            (scores, index, honba, sticks, hands_played) = (
+                su.scores,
+                su.round_wind * 4 + su.kyoku,
+                su.honba,
+                su.riichi_sticks,
+                su.hands_played,
+            );
+            (Some(snap), until)
+        }
+    };
 
     loop {
-        let setup = KyokuSetup {
-            round_wind: index / 4,
-            kyoku: index % 4,
-            honba,
-            riichi_sticks: sticks,
-            scores,
-            total_kyoku: regular_hands,
+        let dealer = index % 4;
+        let out = match pending.take() {
+            Some(snap) => Kyoku::resume(snap.state.clone(), rules, table, snap.resume.clone())?,
+            None => {
+                let setup = KyokuSetup {
+                    round_wind: index / 4,
+                    kyoku: index % 4,
+                    honba,
+                    riichi_sticks: sticks,
+                    scores,
+                    total_kyoku: regular_hands,
+                    hands_played,
+                };
+                // 第 N 手的牌山只由 (seed, N) 決定，與打法無關（duplicate 對戰需要）。
+                let wall = match cfg.preset_walls.get(hands_played as usize) {
+                    Some(tiles) => Wall::from_tiles(tiles.clone()),
+                    None => Wall::shuffled(hand_seed(cfg.seed, hands_played), rules.red_fives),
+                };
+                if keep_log {
+                    walls.push(wall.tiles().to_vec());
+                }
+                Kyoku::new(setup, rules, wall, table).run()?
+            }
         };
-        // 第 N 手的牌山只由 (seed, N) 決定，與打法無關（duplicate 對戰需要）。
-        let wall = match cfg.preset_walls.get(hands_played as usize) {
-            Some(tiles) => Wall::from_tiles(tiles.clone()),
-            None => Wall::shuffled(hand_seed(cfg.seed, hands_played), rules.red_fives),
-        };
-        if keep_log {
-            walls.push(wall.tiles().to_vec());
-        }
-        let out = Kyoku::new(&setup, rules, wall, &mut table).run()?;
         hands_played += 1;
         scores = out.scores;
         sticks = out.riichi_sticks;
-        let dealer = setup.kyoku;
         // 閒家和牌時本場歸零；莊家和牌或流局時本場加一。
         let dealer_won = out.winners.contains(&dealer);
         honba = if !out.winners.is_empty() && !dealer_won {
@@ -117,6 +199,15 @@ pub fn run_game_with(
             honba.saturating_add(1)
         };
 
+        if until == Until::HandEnd {
+            return Ok(GameResult {
+                scores,
+                ranks: ranking(&scores),
+                hands_played,
+                log: table.log.take().unwrap_or_default(),
+                walls,
+            });
+        }
         let ended = cfg.max_hands.is_some_and(|m| hands_played >= m)
             || match_over(rules, index, &scores, dealer, out.dealer_continues);
         if ended {

@@ -6,5 +6,6 @@
 
 pub mod bots;
 pub mod counterfactual;
+pub mod duplicate;
 pub mod predict_eval;
 pub mod replay;

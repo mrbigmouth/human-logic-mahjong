@@ -9,11 +9,15 @@
 mod event;
 mod game;
 mod kyoku;
+mod snapshot;
 mod wall;
 
 pub use event::{DrawReason, Event, HandEnd};
-pub use game::{GameConfig, GameResult, run_game, run_game_with};
+pub use game::{
+    GameConfig, GameResult, Until, capture_snapshot, resume_game, run_game, run_game_with,
+};
 pub use kyoku::EngineError;
+pub use snapshot::{DeterminizeReport, Snapshot};
 pub use wall::{Wall, full_set, hand_seed};
 
 use mj_core::{Meld, Pai, Tile, TileCounts};

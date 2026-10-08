@@ -23,10 +23,10 @@ mj-cli / app(Tauri) ── 以上全部
 | `mj-core` | `Tile`（34 種）、`Pai`（含赤寶牌）、`Meld`、`TileCounts`、牌的記法解析 | M1 ✅ |
 | `mj-calc` | 精確向聽（標準型、七對、國士）、進張、聽牌、和牌拆解；接受讀牌層的 `RemainingEstimate` | M1 ✅（和牌機率、期望打點：M2） |
 | `mj-rules` | `RuleSet` trait；`riichi`：全部役種與役滿、符、點數、`RiichiConfig` 規則選項（預設天鳳規則） | M1 ✅ |
-| `mj-engine` | 對局狀態機（`run_game`）、`Action`、`PlayerView`、`Player` trait、seed 牌山、事件流 | M1 ✅ |
+| `mj-engine` | 對局狀態機（`run_game`）、`Action`、`PlayerView`、`Player` trait、seed 牌山、事件流；局面快照、重抽看不到的牌、從快照繼續（M3） | M1 ✅ / M3 ✅ |
 | `mj-tools` | 策略編輯者的純計算工具箱：手牌、動作後評估、看得到的牌、安全度事實（現物、筋、No Chance）、役的路線、點數、寶牌、牌桌 | M2.5 ✅ |
 | `mj-strategy` | `src/strategy-list/` 策略（main.rs、memory.rs、decision/、utils/predict/）；`framework/` 把引擎詢問拆成決策、記錄理由與預測；`build.rs` 自動產生模組；`TOOLS.md` 工具手冊 | M2.5 ✅ / M4+ 策略內容 |
-| `mj-sim` | 參考機器人（`RandomBot`、`GreedyBot`）；`replay` 牌譜重播；`predict_eval` 預測準確度；`counterfactual` 反事實決策評估；duplicate 對戰（M3） | M2.5 ✅ / M3 |
+| `mj-sim` | 參考機器人（`RandomBot`、`GreedyBot`）；`replay` 牌譜重播；`predict_eval` 預測準確度；`counterfactual` 反事實決策評估；`duplicate` 對戰 | M3 ✅ |
 | `mj-tuner` | 可調參數的自動調整（預測以準確度擬合、決策以反事實期望值） | M8 |
 | `mj-review` | 天鳳／mjai 牌譜匯入（M4）；逐手比對使用者與策略的選擇，附理由與反事實期望值（M7） | M4 / M7 |
 | `mj-mjai` | mjai bridge，與外部強 AI 對戰與比對 | M8 |

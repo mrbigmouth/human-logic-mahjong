@@ -228,6 +228,7 @@
 ## 8. Claim：預測
 
 `ctx.claim(來源, Claim)` 記錄的預測，`p` = 預測「是」的機率（0–1）。
+框架會自動附上被預測者當時的情境（`TargetSituation`：巡目、副露組數、是否立直），`mj predict-eval` 依此分組。
 
 | `Claim` | 預測內容 | 真相（全知視角，由 `mj predict-eval` 判定） |
 |---|---|---|

@@ -40,6 +40,7 @@ S=tenhou-normal-4p-hanchan
 ./target/release/mj selfplay --games 2000 --seats $S,greedy,greedy,random   # 對戰成績
 ./target/release/mj predict-eval --strategy $S --games 300                 # 預測準確度
 ./target/release/mj evaluate --strategy $S --games 20                      # 決策品質（反事實模擬）
+./target/release/mj simulate $S greedy --blocks 1000                        # duplicate 對戰比較
 
 # fuzz 建置：每回合檢查牌數與點數守恆
 cargo build --profile fuzz -p mj-cli
@@ -58,7 +59,7 @@ crates/
   mj-engine    對局狀態機、Action、PlayerView、Player、事件紀錄
   mj-tools     純計算工具箱（策略編輯者使用）：手牌、安全度、役、點數、牌桌
   mj-strategy  src/strategy-list/ 策略（if／else 決策程式）＋ framework 呼叫框架  ← 核心
-  mj-sim       參考機器人、牌譜重播、預測準確度評估、反事實決策評估
+  mj-sim       參考機器人、牌譜重播、預測準確度評估、反事實決策評估、duplicate 對戰
   mj-tuner     （M8）可調參數的自動調整
   mj-review    牌譜匯入與復盤解說
   mj-mjai      mjai 協定（和外部 AI 對戰）

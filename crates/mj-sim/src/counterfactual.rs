@@ -1,49 +1,65 @@
 //! 決策品質評估（反事實模擬）：不看整場輸贏，而是逐一檢查「這個決策選得好不好」。
 //!
 //! 做法：
-//! 1. 正常打一場對局，記錄每個決策（選項、選擇、理由）。
-//! 2. 抽樣一些決策點。對每個選項（含實際的選擇），重打這一局 R 次：之前的局照原樣重播，
-//!    到這個決策點時強制選這個選項，之後牌山中「還沒摸到的部分」每次重新洗牌。
-//! 3. 比較各選項在這一局的平均點數得失。實際選擇與最佳選項的差距 = 這個決策的「損失」。
+//! 1. 正常打一場對局，記錄每個決策（選項、選擇、理由、當時的情境）。
+//! 2. 抽樣一些決策點。重播這場對局，在決策點保存局面快照（`capture_snapshot`）。
+//! 3. 產生 R 個「可能的世界」：依決策者看得到的資訊，重新分配看不到的牌
+//!    （對手的門前牌、未摸的牌山；立直者必須聽牌且沒有振聽）——不偷看對手手牌。
+//! 4. 對每個選項，在每個世界中從快照繼續打（強制選這個選項），比較各選項的平均結果：
+//!    - 名次點（預設）：打到整場結束，(點數 − 30000) ÷ 1000 ＋ 順位馬 ＋ 第一名的返點 20；
+//!    - 點數：只打完這一局，計算這一局的點數得失。
+//! 5. 實際選擇與最佳選項的差距 = 這個決策的「損失」。差距不顯著時自動增加世界數，直到上限。
 //!
-//! 各選項使用同一組 R 種洗牌（共同隨機數），差距的變異比各自獨立抽樣小得多。
-//!
-//! 限制（第一版）：對手的手牌維持真實的牌（全知），只重洗未摸的牌山；王牌（嶺上、寶牌指示牌）不變。
-//! 也就是評估「在實際局面下，哪個選擇的期望值較高」。
+//! 各選項使用同一組世界（共同隨機數），差距的雜訊比各自獨立抽樣小得多。
 
-use mj_engine::{Event, GameConfig, Player, run_game_with};
+use mj_engine::{
+    GameConfig, Player, Snapshot, Until, capture_snapshot, hand_seed, resume_game, run_game_with,
+};
 use mj_rules::riichi::RiichiConfig;
-use mj_strategy::framework::{DecisionKind, DecisionRecord, Force, Strategy};
+use mj_strategy::framework::{DecisionKind, DecisionRecord, Force, Strategy, StrategyPlayer};
+use rand::SeedableRng;
 use rand::seq::SliceRandom;
-use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use rayon::prelude::*;
+use serde::Serialize;
 use std::sync::Arc;
 
-/// 配牌張數（4 家 × 13）。
-const DEAL: usize = 52;
-/// 牌山中可摸的部分（136 − 王牌 14）。
-const LIVE: usize = 122;
+/// 用什麼衡量一個選項的結果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum Metric {
+    /// 名次點：打到整場結束（含順位馬與返點）
+    Placement,
+    /// 這一局的點數得失
+    Points,
+}
 
 /// 評估設定。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Options {
     /// 每場對局抽樣幾個決策點
     pub samples: usize,
-    /// 每個選項重打幾次
+    /// 每個選項最少重打幾次（世界數）
     pub rollouts: usize,
+    /// 差距不顯著時，世界數最多增加到多少
+    pub max_rollouts: usize,
+    /// 衡量方式
+    pub metric: Metric,
+    /// 是否重抽看不到的牌（false = 使用真實的對手手牌，即全知；用來比較）
+    pub determinize: bool,
+    /// 只評估這些決策種類（空 = 全部）
+    pub kinds: Vec<DecisionKind>,
 }
 
 /// 一個決策點的評估結果。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DecisionEval {
     /// 對局 seed
     pub game_seed: u64,
     /// 做決策的座位
     pub seat: u8,
-    /// 原始決策紀錄（選項、選擇、理由）
+    /// 原始決策紀錄（選項、選擇、理由、情境）
     pub record: DecisionRecord,
-    /// 各選項在這一局的平均點數得失
+    /// 各選項的平均結果（名次點或點數）
     pub option_ev: Vec<f64>,
     /// 期望值最高的選項
     pub best: usize,
@@ -51,217 +67,368 @@ pub struct DecisionEval {
     pub loss: f64,
     /// 損失的標準誤（由成對的重打差值估計）
     pub loss_se: f64,
+    /// 實際使用的世界數
+    pub rollouts: usize,
+    /// 重抽時找不到合理立直手牌而保留原手牌的次數
+    pub riichi_fallbacks: usize,
 }
 
-/// 第 `hand` 局在 `event_index` 之前，從牌山（非嶺上）摸了幾張牌。
-fn draws_before(log: &[Event], hand: u32, event_index: usize) -> usize {
-    let mut current: i64 = -1;
-    let mut draws = 0;
-    for ev in &log[..event_index.min(log.len())] {
-        match ev {
-            Event::StartKyoku { .. } => {
-                current += 1;
-                draws = 0;
+impl DecisionEval {
+    /// 損失是否顯著（大於 2 倍標準誤）。
+    pub fn significant(&self) -> bool {
+        self.loss > 0.0 && self.loss > 2.0 * self.loss_se
+    }
+}
+
+/// 名次點：(點數 − 30000) ÷ 1000 ＋ 順位馬 ＋ 第一名的返點 20（天鳳式，四家合計為 0）。
+pub fn placement_points(rules: &RiichiConfig, scores: &[i32; 4], ranks: &[u8; 4], seat: u8) -> f64 {
+    let s = usize::from(seat);
+    let rank = usize::from(ranks[s]);
+    let oka = if rank == 0 {
+        f64::from(4 * (rules.target_points - rules.starting_points)) / 1000.0
+    } else {
+        0.0
+    };
+    f64::from(scores[s] - rules.target_points) / 1000.0 + f64::from(rules.uma[rank]) + oka
+}
+
+/// 建立四個策略玩家。
+fn players(strategy: &Arc<dyn Strategy>, record: bool) -> Vec<Box<dyn StrategyPlayer>> {
+    (0..4).map(|_| strategy.player(record, None)).collect()
+}
+
+/// 把玩家借給引擎。
+fn refs(ps: &mut [Box<dyn StrategyPlayer>]) -> [&mut dyn Player; 4] {
+    let mut it = ps.iter_mut().map(|p| p.as_mut() as &mut dyn Player);
+    std::array::from_fn(|_| it.next().unwrap())
+}
+
+/// 一個決策點：在一組世界中，每個選項重打的結果。
+struct Rollouts {
+    per_option: Vec<Vec<f64>>,
+    fallbacks: usize,
+}
+
+/// 在 `worlds` 個新世界中，替每個選項各重打一次並累加到 `acc`。
+#[allow(clippy::too_many_arguments)]
+fn run_worlds(
+    rules: &RiichiConfig,
+    snap: &Snapshot,
+    base: &[Box<dyn StrategyPlayer>],
+    record: &DecisionRecord,
+    seat: u8,
+    seeds: std::ops::Range<u64>,
+    opts: &Options,
+    acc: &mut Rollouts,
+) -> Result<(), String> {
+    for world_seed in seeds {
+        let mut world = snap.clone();
+        if opts.determinize {
+            acc.fallbacks += world
+                .determinize(&mut ChaCha8Rng::seed_from_u64(world_seed))
+                .riichi_fallbacks;
+        }
+        // 之後各局的牌山也依世界而不同。
+        let cfg = GameConfig::new(rules.clone(), hand_seed(world_seed, 0x00C0_FFEE));
+        let until = match opts.metric {
+            Metric::Placement => Until::GameEnd,
+            Metric::Points => Until::HandEnd,
+        };
+        for (option, out) in acc.per_option.iter_mut().enumerate() {
+            let mut ps: Vec<Box<dyn StrategyPlayer>> = base.iter().map(|p| p.clone_box()).collect();
+            ps[usize::from(seat)].set_force(Some(Force {
+                act_index: record.act_index,
+                kind: record.kind,
+                option,
+            }));
+            ps[usize::from(seat)].set_record(true);
+            let res = resume_game(&cfg, &world, refs(&mut ps), false, until)
+                .map_err(|e| e.to_string())?;
+            if !ps[usize::from(seat)]
+                .take_records()
+                .iter()
+                .any(|r| r.forced)
+            {
+                return Err("重播沒有走到決策點".into());
             }
-            Event::Draw { rinshan: false, .. } if current == i64::from(hand) => draws += 1,
-            _ => {}
+            out.push(match opts.metric {
+                Metric::Placement => placement_points(rules, &res.scores, &res.ranks, seat),
+                Metric::Points => f64::from(
+                    res.scores[usize::from(seat)] - snap.hand_start_scores()[usize::from(seat)],
+                ),
+            });
         }
     }
-    draws
+    Ok(())
 }
 
-/// 最後一局（`hand`）開始與結束時的點數，回傳 `seat` 的得失。
-fn hand_delta(log: &[Event], seat: u8) -> Option<f64> {
-    let start = log.iter().rev().find_map(|e| match e {
-        Event::StartKyoku { scores, .. } => Some(*scores),
-        _ => None,
-    })?;
-    let end = log.iter().rev().find_map(|e| match e {
-        Event::EndKyoku { scores } => Some(*scores),
-        _ => None,
-    })?;
-    Some(f64::from(end[usize::from(seat)] - start[usize::from(seat)]))
-}
-
-/// 用 4 個（可能有一個被強制指定決策的）策略玩家打一場，回傳對局結果與該座位的決策紀錄。
-fn play(
-    strategy: &Arc<dyn Strategy>,
-    cfg: &GameConfig,
-    forced_seat: Option<(u8, Force)>,
-    record_all: bool,
-) -> Result<(mj_engine::GameResult, Vec<Vec<DecisionRecord>>), String> {
-    let mut sps: Vec<_> = (0..4u8)
-        .map(|s| match forced_seat {
-            Some((fs, f)) if fs == s => strategy.player(true, Some(f)),
-            _ => strategy.player(record_all, None),
-        })
+/// 由每個選項的結果計算最佳選項、損失與標準誤。
+fn summarize_option(per_option: &[Vec<f64>], chosen: usize) -> (Vec<f64>, usize, f64, f64) {
+    let ev: Vec<f64> = per_option
+        .iter()
+        .map(|d| d.iter().sum::<f64>() / d.len() as f64)
         .collect();
-    let refs: [&mut dyn Player; 4] = {
-        let mut it = sps.iter_mut().map(|p| p.as_mut() as &mut dyn Player);
-        std::array::from_fn(|_| it.next().unwrap())
-    };
-    let result = run_game_with(cfg, refs, true).map_err(|e| e.to_string())?;
-    let records = sps.iter_mut().map(|p| p.take_records()).collect();
-    Ok((result, records))
+    let best = (0..ev.len())
+        .max_by(|&a, &b| ev[a].total_cmp(&ev[b]))
+        .unwrap();
+    let diffs: Vec<f64> = per_option[best]
+        .iter()
+        .zip(&per_option[chosen])
+        .map(|(b, c)| b - c)
+        .collect();
+    let n = diffs.len() as f64;
+    let mean = diffs.iter().sum::<f64>() / n;
+    let var = diffs.iter().map(|d| (d - mean).powi(2)).sum::<f64>() / (n - 1.0).max(1.0);
+    (ev.clone(), best, ev[best] - ev[chosen], (var / n).sqrt())
 }
 
-/// 評估一場對局中抽樣的決策點。
+/// 評估一個決策點。快照點不支援（搶槓）或重播沒有走到決策點時回傳 `None`。
+fn evaluate_point(
+    strategy: &Arc<dyn Strategy>,
+    game_seed: u64,
+    seat: u8,
+    record: DecisionRecord,
+    opts: &Options,
+) -> Result<Option<DecisionEval>, String> {
+    let rules = RiichiConfig::TENHOU;
+    let cfg = GameConfig::new(rules.clone(), game_seed);
+    let mut base = players(strategy, false);
+    let Some(snap) = capture_snapshot(&cfg, refs(&mut base), seat, record.act_index)
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(None);
+    };
+    let mut acc = Rollouts {
+        per_option: vec![Vec::new(); record.options.len()],
+        fallbacks: 0,
+    };
+    let seed_base = hand_seed(game_seed, (u32::from(seat) << 24) ^ record.act_index);
+    let mut done = 0u64;
+    let step = opts.rollouts.max(2) as u64;
+    loop {
+        let r = run_worlds(
+            &rules,
+            &snap,
+            &base,
+            &record,
+            seat,
+            seed_base + done..seed_base + done + step,
+            opts,
+            &mut acc,
+        );
+        if r.is_err() {
+            return Ok(None);
+        }
+        done += step;
+        let (_, best, loss, se) = summarize_option(&acc.per_option, record.chosen);
+        let settled = best == record.chosen || loss > 2.0 * se;
+        if settled || done as usize >= opts.max_rollouts {
+            break;
+        }
+    }
+    let (option_ev, best, loss, loss_se) = summarize_option(&acc.per_option, record.chosen);
+    Ok(Some(DecisionEval {
+        game_seed,
+        seat,
+        record,
+        option_ev,
+        best,
+        loss,
+        loss_se,
+        rollouts: done as usize,
+        riichi_fallbacks: acc.fallbacks,
+    }))
+}
+
+/// 評估一場對局中抽樣的決策點。回傳（評估結果, 無法評估而略過的決策點數）。
 pub fn evaluate_game(
     strategy: Arc<dyn Strategy>,
     game_seed: u64,
-    opts: Options,
-) -> Result<Vec<DecisionEval>, String> {
-    let base_cfg = GameConfig::new(RiichiConfig::TENHOU, game_seed);
-    let (original, records) = play(&strategy, &base_cfg, None, true)?;
-
-    // 只評估有兩個以上選項、而且這一局有正常結束的決策。
-    let mut candidates: Vec<(u8, DecisionRecord)> = records
-        .into_iter()
+    opts: &Options,
+) -> Result<(Vec<DecisionEval>, usize), String> {
+    let cfg = GameConfig::new(RiichiConfig::TENHOU, game_seed);
+    let mut ps = players(&strategy, true);
+    run_game_with(&cfg, refs(&mut ps), false).map_err(|e| e.to_string())?;
+    let mut candidates: Vec<(u8, DecisionRecord)> = ps
+        .iter_mut()
         .enumerate()
-        .flat_map(|(s, rs)| rs.into_iter().map(move |r| (s as u8, r)))
-        .filter(|(_, r)| r.options.len() >= 2 && (r.hand_index as usize) < original.walls.len())
+        .flat_map(|(s, p)| p.take_records().into_iter().map(move |r| (s as u8, r)))
+        .filter(|(_, r)| r.options.len() >= 2 && r.kind != DecisionKind::Predict)
+        .filter(|(_, r)| opts.kinds.is_empty() || opts.kinds.contains(&r.kind))
         .collect();
     let mut rng = ChaCha8Rng::seed_from_u64(game_seed ^ 0x5EED);
     candidates.shuffle(&mut rng);
     candidates.truncate(opts.samples);
 
-    candidates
+    let results: Vec<Option<DecisionEval>> = candidates
         .into_par_iter()
-        .map(|(seat, record)| {
-            let hand = record.hand_index;
-            let drawn = draws_before(&original.log, hand, record.event_index);
-            let keep = (DEAL + drawn).min(LIVE);
-            // 每次重打的洗牌：所有選項共用同一組（共同隨機數）。
-            let mut shuffle_rng = ChaCha8Rng::seed_from_u64(
-                game_seed
-                    ^ (u64::from(hand) << 32)
-                    ^ u64::from(record.act_index)
-                    ^ (u64::from(seat) << 48),
-            );
-            let walls: Vec<Vec<mj_core::Pai>> = (0..opts.rollouts)
-                .map(|_| {
-                    let mut w = original.walls[hand as usize].clone();
-                    w[keep..LIVE].shuffle(&mut shuffle_rng);
-                    // 讓洗牌序列不依賴選項數目。
-                    let _: u64 = shuffle_rng.random();
-                    w
-                })
-                .collect();
-            let mut per_option: Vec<Vec<f64>> = Vec::with_capacity(record.options.len());
-            for option in 0..record.options.len() {
-                let force = Force {
-                    act_index: record.act_index,
-                    kind: record.kind,
-                    option,
-                };
-                let mut deltas = Vec::with_capacity(opts.rollouts);
-                for w in &walls {
-                    let mut cfg = base_cfg.clone();
-                    cfg.preset_walls = original.walls[..hand as usize].to_vec();
-                    cfg.preset_walls.push(w.clone());
-                    cfg.max_hands = Some(hand + 1);
-                    let (res, recs) = play(&strategy, &cfg, Some((seat, force)), false)?;
-                    // 確認重播確實走到同一個決策點並套用了指定的選項。
-                    if !recs[usize::from(seat)].iter().any(|r| r.forced) {
-                        return Err(format!(
-                            "重播沒有走到決策點（seed {game_seed}、第 {hand} 局、座位 {seat}、{}）",
-                            record.kind.name()
-                        ));
-                    }
-                    deltas.push(hand_delta(&res.log, seat).ok_or("找不到本局點數")?);
-                }
-                per_option.push(deltas);
-            }
-            let option_ev: Vec<f64> = per_option
-                .iter()
-                .map(|d| d.iter().sum::<f64>() / d.len() as f64)
-                .collect();
-            let best = (0..option_ev.len())
-                .max_by(|&a, &b| option_ev[a].total_cmp(&option_ev[b]))
-                .unwrap();
-            let diffs: Vec<f64> = per_option[best]
-                .iter()
-                .zip(&per_option[record.chosen])
-                .map(|(b, c)| b - c)
-                .collect();
-            let n = diffs.len() as f64;
-            let mean = diffs.iter().sum::<f64>() / n;
-            let var = diffs.iter().map(|d| (d - mean).powi(2)).sum::<f64>() / (n - 1.0).max(1.0);
-            Ok(DecisionEval {
-                game_seed,
-                seat,
-                loss: option_ev[best] - option_ev[record.chosen],
-                loss_se: (var / n).sqrt(),
-                record,
-                option_ev,
-                best,
-            })
-        })
-        .collect()
+        .map(|(seat, record)| evaluate_point(&strategy, game_seed, seat, record, opts))
+        .collect::<Result<_, String>>()?;
+    let skipped = results.iter().filter(|r| r.is_none()).count();
+    Ok((results.into_iter().flatten().collect(), skipped))
 }
 
-/// 依決策種類彙整的統計。
-#[derive(Debug, Clone, Default)]
-pub struct KindSummary {
+/// 一組決策的統計。
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct GroupSummary {
     /// 評估的決策數
     pub n: usize,
     /// 實際選擇就是期望值最高選項的比例
     pub agree: f64,
-    /// 平均損失（點）
+    /// 平均損失
     pub mean_loss: f64,
+    /// 平均損失的標準誤（決策之間的差異）
+    pub mean_loss_se: f64,
     /// 損失顯著（大於 2 倍標準誤）的比例
     pub significant: f64,
 }
 
+/// 計算一組決策的統計。
+pub fn group(evals: &[&DecisionEval]) -> GroupSummary {
+    if evals.is_empty() {
+        return GroupSummary::default();
+    }
+    let n = evals.len() as f64;
+    let mean_loss = evals.iter().map(|e| e.loss).sum::<f64>() / n;
+    let var = evals
+        .iter()
+        .map(|e| (e.loss - mean_loss).powi(2))
+        .sum::<f64>()
+        / (n - 1.0).max(1.0);
+    GroupSummary {
+        n: evals.len(),
+        agree: evals.iter().filter(|e| e.best == e.record.chosen).count() as f64 / n,
+        mean_loss,
+        mean_loss_se: (var / n).sqrt(),
+        significant: evals.iter().filter(|e| e.significant()).count() as f64 / n,
+    }
+}
+
 /// 依決策種類彙整。
-pub fn summarize(evals: &[DecisionEval]) -> Vec<(DecisionKind, KindSummary)> {
+pub fn summarize(evals: &[DecisionEval]) -> Vec<(DecisionKind, GroupSummary)> {
     DecisionKind::ALL
         .iter()
         .filter_map(|&k| {
             let v: Vec<&DecisionEval> = evals.iter().filter(|e| e.record.kind == k).collect();
-            if v.is_empty() {
-                return None;
-            }
-            let n = v.len() as f64;
-            Some((
-                k,
-                KindSummary {
-                    n: v.len(),
-                    agree: v.iter().filter(|e| e.best == e.record.chosen).count() as f64 / n,
-                    mean_loss: v.iter().map(|e| e.loss).sum::<f64>() / n,
-                    significant: v
-                        .iter()
-                        .filter(|e| e.loss > 2.0 * e.loss_se && e.loss > 0.0)
-                        .count() as f64
-                        / n,
-                },
-            ))
+            (!v.is_empty()).then(|| (k, group(&v)))
         })
         .collect()
+}
+
+/// 情境的分組方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dimension {
+    /// 有無立直的對手
+    Riichi,
+    /// 自己的向聽數
+    Shanten,
+    /// 巡目
+    Turn,
+    /// 名次
+    Rank,
+}
+
+impl Dimension {
+    pub const ALL: [Dimension; 4] = [
+        Dimension::Riichi,
+        Dimension::Shanten,
+        Dimension::Turn,
+        Dimension::Rank,
+    ];
+
+    /// 中文名稱。
+    pub fn name(self) -> &'static str {
+        match self {
+            Dimension::Riichi => "立直的對手",
+            Dimension::Shanten => "自己的向聽",
+            Dimension::Turn => "巡目",
+            Dimension::Rank => "名次",
+        }
+    }
+
+    /// 一個決策屬於哪一組（組名）。
+    pub fn bucket(self, e: &DecisionEval) -> String {
+        let s = &e.record.situation;
+        match self {
+            Dimension::Riichi => {
+                if s.riichi_opponents == 0 {
+                    "沒有".into()
+                } else {
+                    "有".into()
+                }
+            }
+            Dimension::Shanten => match s.shanten {
+                ..=0 => "聽牌以內".into(),
+                1 => "1 向聽".into(),
+                2 => "2 向聽".into(),
+                _ => "3 向聽以上".into(),
+            },
+            Dimension::Turn => match s.turn {
+                0..=5 => "序盤（0–5）".into(),
+                6..=11 => "中盤（6–11）".into(),
+                _ => "終盤（12+）".into(),
+            },
+            Dimension::Rank => format!("第 {} 名", s.rank + 1),
+        }
+    }
+}
+
+/// 依某個情境維度分組（只看某種決策；`kind = None` 表示全部）。
+pub fn by_dimension(
+    evals: &[DecisionEval],
+    kind: Option<DecisionKind>,
+    dim: Dimension,
+) -> Vec<(String, GroupSummary)> {
+    let mut groups: std::collections::BTreeMap<String, Vec<&DecisionEval>> = Default::default();
+    for e in evals
+        .iter()
+        .filter(|e| kind.is_none_or(|k| e.record.kind == k))
+    {
+        groups.entry(dim.bucket(e)).or_default().push(e);
+    }
+    groups.into_iter().map(|(k, v)| (k, group(&v))).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// 冒煙測試：抽樣的決策點都能重播並套用指定選項，每個選項都有期望值。
+    fn strategy() -> Arc<dyn Strategy> {
+        Arc::from(mj_strategy::find_strategy("tenhou-normal-4p-hanchan").unwrap())
+    }
+
+    /// 冒煙測試：抽樣的決策點都能從快照重打，每個選項都有期望值。
     #[test]
-    fn replays_reach_the_decision_point() {
-        let st: Arc<dyn Strategy> =
-            Arc::from(mj_strategy::find_strategy("tenhou-normal-4p-hanchan").unwrap());
-        let evals = evaluate_game(
-            st,
-            5,
-            Options {
-                samples: 4,
-                rollouts: 2,
-            },
-        )
-        .expect("replay ok");
-        assert_eq!(evals.len(), 4);
+    fn evaluates_sampled_points() {
+        let opts = Options {
+            samples: 3,
+            rollouts: 2,
+            max_rollouts: 2,
+            metric: Metric::Points,
+            determinize: true,
+            kinds: Vec::new(),
+        };
+        let (evals, skipped) = evaluate_game(strategy(), 5, &opts).expect("replay ok");
+        assert_eq!(evals.len() + skipped, 3);
         for e in &evals {
             assert_eq!(e.option_ev.len(), e.record.options.len());
             assert!(e.loss >= 0.0);
         }
+    }
+
+    /// 名次點四家合計為 0。
+    #[test]
+    fn placement_points_sum_to_zero() {
+        let rules = RiichiConfig::TENHOU;
+        let scores = [42_000, 31_000, 18_000, 9_000];
+        let ranks = [0, 1, 2, 3];
+        let total: f64 = (0..4)
+            .map(|s| placement_points(&rules, &scores, &ranks, s))
+            .sum();
+        assert!(total.abs() < 1e-9);
+        assert_eq!(
+            placement_points(&rules, &scores, &ranks, 0),
+            12.0 + 20.0 + 20.0
+        );
     }
 }

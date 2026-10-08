@@ -52,4 +52,27 @@ pub struct ClaimRecord {
     pub me: Seat,
     /// 做預測時已經發生了幾個事件（對應完整牌譜中的位置，用來重建當時的真相）
     pub at_event: usize,
+    /// 被預測者當時的情境（分組統計用）
+    pub target: TargetSituation,
+}
+
+/// 被預測者（預測的對象；「本局和牌」預測則是自己）當時的情境。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TargetSituation {
+    /// 他打過幾張（巡目）
+    pub turn: u8,
+    /// 他的副露組數（不含暗槓）
+    pub open_melds: u8,
+    /// 他是否已立直
+    pub riichi: bool,
+}
+
+impl Claim {
+    /// 預測的對象座位（「本局和牌」為 `None`，代表自己）。
+    pub fn target(&self) -> Option<Seat> {
+        match *self {
+            Claim::Tenpai { seat, .. } | Claim::Waits { seat, .. } => Some(seat),
+            Claim::IWinThisHand { .. } => None,
+        }
+    }
 }

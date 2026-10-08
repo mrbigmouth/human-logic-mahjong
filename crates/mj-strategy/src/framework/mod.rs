@@ -9,6 +9,8 @@ pub mod player;
 
 pub use book::Book;
 pub use choice::{CallChoice, DecisionKind, KanChoice, WinKind};
-pub use claim::{Claim, ClaimRecord};
+pub use claim::{Claim, ClaimRecord, TargetSituation};
 pub use ctx::Ctx;
-pub use player::{BookPlayer, DecisionRecord, Force, Strategy, StrategyPlayer, book_strategy};
+pub use player::{
+    BookPlayer, DecisionRecord, Force, Situation, Strategy, StrategyPlayer, book_strategy,
+};

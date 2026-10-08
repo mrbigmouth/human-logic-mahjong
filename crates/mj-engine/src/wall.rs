@@ -10,7 +10,7 @@ pub const WALL_SIZE: usize = 136;
 /// 王牌（wanpai，dead wall）張數：嶺上牌 4 張＋寶牌指示牌 5 張＋裏寶牌指示牌 5 張。
 const DEAD_WALL: usize = 14;
 /// 可摸的牌山張數（含配牌）。
-const LIVE_WALL: usize = WALL_SIZE - DEAD_WALL;
+pub(crate) const LIVE_WALL: usize = WALL_SIZE - DEAD_WALL;
 
 /// 由對局 seed 推導第 `index` 手牌的牌山 seed（splitmix64 雜湊）。
 /// 牌山只取決於「第幾手」，與打法無關，所以 duplicate（複式）對戰中即使各桌連莊次數不同，
@@ -82,6 +82,21 @@ impl Wall {
     /// 全部 136 張牌（依牌山順序）。
     pub fn tiles(&self) -> &[Pai] {
         &self.tiles
+    }
+
+    /// 牌山（可修改，快照重抽隱藏的牌時使用）。
+    pub(crate) fn tiles_mut(&mut self) -> &mut Vec<Pai> {
+        &mut self.tiles
+    }
+
+    /// 下一張要摸的位置。
+    pub(crate) fn next_index(&self) -> usize {
+        self.next
+    }
+
+    /// 已翻開的寶牌指示牌數。
+    pub(crate) fn revealed(&self) -> usize {
+        self.revealed
     }
 
     /// 已開槓數。

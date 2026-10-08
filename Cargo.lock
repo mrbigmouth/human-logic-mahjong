@@ -221,6 +221,7 @@ dependencies = [
  "rand",
  "rand_chacha",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -264,6 +265,7 @@ dependencies = [
  "rand",
  "rand_chacha",
  "rayon",
+ "serde",
 ]
 
 [[package]]

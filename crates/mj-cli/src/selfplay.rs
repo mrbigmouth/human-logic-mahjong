@@ -28,36 +28,36 @@ enum SeatSpec {
 
 /// 一個座位設定與它在統計中的名稱。
 #[derive(Clone)]
-struct Seat {
-    label: String,
+pub(crate) struct Seat {
+    pub(crate) label: String,
     spec: SeatSpec,
 }
 
-/// 解析座位設定：以逗號分隔的四項，每項是 `greedy`、`random` 或策略名稱（strategy-list 下的目錄名）。
+/// 解析一個參賽者：`greedy`、`random` 或策略名稱（strategy-list 下的目錄名）。
+pub(crate) fn parse_entrant(s: &str) -> Result<Seat, String> {
+    match s.trim() {
+        "greedy" => Ok(Seat {
+            label: "greedy".into(),
+            spec: SeatSpec::Greedy,
+        }),
+        "random" => Ok(Seat {
+            label: "random".into(),
+            spec: SeatSpec::Random,
+        }),
+        name => find_strategy(name)
+            .map(|st| Seat {
+                label: name.to_string(),
+                spec: SeatSpec::Strategy(Arc::from(st)),
+            })
+            .ok_or_else(|| format!("找不到策略 {name}（用 `mj strategies` 查看可用的策略）")),
+    }
+}
+
+/// 解析座位設定：以逗號分隔的四項，每項見 [`parse_entrant`]。
 fn parse_seats(spec: &str) -> Result<Vec<Seat>, String> {
     let seats: Vec<Seat> = spec
         .split(',')
-        .map(|s| {
-            let s = s.trim();
-            match s {
-                "greedy" => Ok(Seat {
-                    label: "greedy".into(),
-                    spec: SeatSpec::Greedy,
-                }),
-                "random" => Ok(Seat {
-                    label: "random".into(),
-                    spec: SeatSpec::Random,
-                }),
-                name => find_strategy(name)
-                    .map(|st| Seat {
-                        label: name.to_string(),
-                        spec: SeatSpec::Strategy(Arc::from(st)),
-                    })
-                    .ok_or_else(|| {
-                        format!("找不到策略 {name}（用 `mj strategies` 查看可用的策略）")
-                    }),
-            }
-        })
+        .map(parse_entrant)
         .collect::<Result<_, String>>()?;
     if seats.len() != 4 {
         return Err(format!("--seats 需要 4 項，目前是 {} 項", seats.len()));
@@ -66,7 +66,7 @@ fn parse_seats(spec: &str) -> Result<Vec<Seat>, String> {
 }
 
 /// 建立玩家（機器人的 seed 由對局 seed 推導，結果可重現）。
-fn make_player(seat: &Seat, seed: u64, i: u64) -> Box<dyn Player> {
+pub(crate) fn make_player(seat: &Seat, seed: u64, i: u64) -> Box<dyn Player> {
     let s = seed.wrapping_mul(31).wrapping_add(i);
     match &seat.spec {
         SeatSpec::Greedy => Box::new(GreedyBot::new(s, 0.3)),

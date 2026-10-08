@@ -170,18 +170,28 @@ mj predict-eval --strategy tenhou-normal-4p-hanchan --games 300
 ## 6. 決策的評分（反事實模擬）
 
 大局觀決策（何切、鳴牌、立直、押引）沒有立即的真相，所以用反事實模擬評分：
-在決策點改選其他選項重打這一局多次，比較各選項的期望點數，算出實際選擇的「損失」。
+在決策點保存局面，依你當時看得到的資訊重抽對手手牌與牌山（不偷看），
+改選每個選項重打多次，比較各選項的期望結果，算出實際選擇的「損失」。
 
 ```sh
-mj evaluate --strategy tenhou-normal-4p-hanchan --games 20 --samples 20 --rollouts 24
+mj evaluate --strategy tenhou-normal-4p-hanchan --games 20                   # 名次點（打到整場結束）
+mj evaluate --strategy tenhou-normal-4p-hanchan --games 20 --metric points   # 這一局的點數（較快、雜訊小）
+mj evaluate ... --kinds discard,call --json result.json                      # 只評估某些決策、輸出 JSON
 ```
 
-輸出各決策種類的「選到最佳的比例」「平均損失」「顯著損失比例」，並列出損失最大的決策
+輸出各決策種類的「選到最佳的比例」「平均損失 ± 標準誤」「顯著損失比例」，何切與鳴牌再依
+「有無立直者、向聽、巡目、名次」分組，並列出損失最大的顯著決策
 （附上當時 `ctx.note` 寫下的理由與預測，方便找出思路哪裡錯了）。
+
+比較兩個策略（或同一策略的兩個版本）的整體強弱用 duplicate 對戰：
+
+```sh
+mj simulate 策略A 策略B --blocks 1000
+```
 
 ## 7. 對局記憶 `Memory`
 
-`memory.rs` 定義 `pub struct Memory`（需要 `Default`），整場對局（半莊）中所有決策共用，
+`memory.rs` 定義 `pub struct Memory`（需要 `Default` 與 `Clone`，通常寫 `#[derive(Default, Clone)]`），整場對局（半莊）中所有決策共用，
 每場對局開始時重新建立。`observe(me, &Event, &mut Memory)` 對每個事件呼叫，用來記下觀察到的事，例如：
 
 - 某家立直了幾次（愛立直的人）

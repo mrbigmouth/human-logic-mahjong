@@ -16,6 +16,31 @@ use mj_engine::{Action, Event, Player, PlayerView, Seat};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+/// 決策當時的情境（分組統計用）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Situation {
+    /// 已立直的對手人數
+    pub riichi_opponents: u8,
+    /// 自己的向聽數（摸牌後取打出最好一張後的值）
+    pub shanten: i8,
+    /// 自己打過幾張（巡目）
+    pub turn: u8,
+    /// 目前名次，0 = 第一名
+    pub rank: u8,
+}
+
+impl Situation {
+    /// 由玩家視角計算。
+    pub fn of(view: &PlayerView) -> Self {
+        Situation {
+            riichi_opponents: mj_tools::table::riichi_opponents(view).len() as u8,
+            shanten: mj_tools::hand::my_shanten(view),
+            turn: view.rivers[usize::from(view.me)].len() as u8,
+            rank: mj_tools::table::standing(view).rank,
+        }
+    }
+}
+
 /// 一次決策的紀錄。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DecisionRecord {
@@ -39,6 +64,8 @@ pub struct DecisionRecord {
     pub invalid: bool,
     /// 這個決策是被強制指定的（反事實評估用）
     pub forced: bool,
+    /// 決策當時的情境
+    pub situation: Situation,
 }
 
 /// 強制指定某次決策的選項（反事實評估：「如果當時選另一個會怎樣」）。
@@ -50,6 +77,7 @@ pub struct Force {
 }
 
 /// 依策略手冊打牌的玩家。
+#[derive(Clone)]
 pub struct BookPlayer<M> {
     book: Arc<Book<M>>,
     mem: M,
@@ -147,6 +175,7 @@ impl<M: Default> BookPlayer<M> {
                 claims,
                 invalid,
                 forced: forced.is_some(),
+                situation: Situation::of(ctx.view),
             });
         }
         options[idx].clone()
@@ -321,15 +350,33 @@ pub trait StrategyPlayer: Player + Send {
     fn take_records(&mut self) -> Vec<DecisionRecord>;
     /// 取出全部預測紀錄（決策中做的與常駐預測）。
     fn take_claims(&mut self) -> Vec<ClaimRecord>;
+    /// 複製目前的狀態（對局記憶、詢問次數……）。反事實評估在快照點複製玩家後繼續打。
+    fn clone_box(&self) -> Box<dyn StrategyPlayer>;
+    /// 設定（或取消）強制指定的決策選項。
+    fn set_force(&mut self, force: Option<Force>);
+    /// 設定是否記錄決策。
+    fn set_record(&mut self, record: bool);
 }
 
-impl<M: Default + Send> StrategyPlayer for BookPlayer<M> {
+impl<M: Default + Clone + Send + 'static> StrategyPlayer for BookPlayer<M> {
     fn take_records(&mut self) -> Vec<DecisionRecord> {
         BookPlayer::take_records(self)
     }
 
     fn take_claims(&mut self) -> Vec<ClaimRecord> {
         BookPlayer::take_claims(self)
+    }
+
+    fn clone_box(&self) -> Box<dyn StrategyPlayer> {
+        Box::new(self.clone())
+    }
+
+    fn set_force(&mut self, force: Option<Force>) {
+        self.force = force;
+    }
+
+    fn set_record(&mut self, record: bool) {
+        self.record = record;
     }
 }
 
@@ -339,7 +386,7 @@ pub struct BookStrategy<M> {
     book: Arc<Book<M>>,
 }
 
-impl<M: Default + Send + 'static> Strategy for BookStrategy<M> {
+impl<M: Default + Clone + Send + 'static> Strategy for BookStrategy<M> {
     fn name(&self) -> &str {
         &self.name
     }
@@ -354,7 +401,7 @@ impl<M: Default + Send + 'static> Strategy for BookStrategy<M> {
 }
 
 /// 用策略的 `register` 函式建立策略（由自動產生的程式碼呼叫）。
-pub fn book_strategy<M: Default + Send + 'static>(
+pub fn book_strategy<M: Default + Clone + Send + 'static>(
     name: &str,
     register: fn(&mut Book<M>),
 ) -> Box<dyn Strategy> {
