@@ -1,0 +1,729 @@
+:root {
+  color-scheme: dark;
+  --bg: #1b1f24;
+  --panel: #252b33;
+  --panel-2: #2e3540;
+  --text: #e6e8eb;
+  --muted: #9aa4b1;
+  --accent: #4fc3f7;
+  --good: #66bb6a;
+  --bad: #ef5350;
+  --warn: #ffb74d;
+  --felt: #1f5f46;
+  --felt-dark: #184a37;
+  /* 牌桌邊長；所有牌的大小依它計算 */
+  --B: min(640px, calc(100vh - 150px), calc(100vw - 400px));
+  font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+}
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid #44505e;
+  border-radius: 6px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+button:hover {
+  border-color: var(--accent);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+button.primary {
+  background: #1976d2;
+  border-color: #1976d2;
+}
+button.big {
+  font-size: 1.15em;
+  padding: 10px 28px;
+}
+
+select,
+input {
+  font: inherit;
+  color: var(--text);
+  background-color: var(--panel-2);
+  border: 1px solid #44505e;
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+/* WebKitGTK（Linux 桌面版）的原生下拉選單不吃深色樣式，改用 CSS 自己畫 */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 28px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 15px) 50%, calc(100% - 10px) 50%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
+select option {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.muted {
+  color: var(--muted);
+}
+.error {
+  color: var(--bad);
+  margin: 12px 0;
+}
+
+/* ---------- 牌 ---------- */
+.tile {
+  --w: 30px;
+  position: relative;
+  display: inline-block;
+  width: var(--w);
+  height: calc(var(--w) * 4 / 3);
+  flex: none;
+  vertical-align: bottom;
+}
+.tile-inner {
+  position: absolute;
+  inset: 0;
+}
+.tile img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  user-select: none;
+}
+.tile .face {
+  transform: scale(0.86);
+}
+.tile .base + .face {
+  transform: scale(0.8);
+}
+/* 牌面圖載入失敗時的文字 */
+.tile .face-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #c0392b;
+  font-weight: bold;
+  font-size: calc(var(--w) * 0.45);
+}
+.tile.sideways {
+  width: calc(var(--w) * 4 / 3);
+}
+.tile.sideways .tile-inner {
+  inset: auto;
+  left: 50%;
+  bottom: 0;
+  width: var(--w);
+  height: calc(var(--w) * 4 / 3);
+  transform: translate(-50%, 0) rotate(-90deg) translateX(calc(var(--w) * -1 / 6));
+}
+.tile.back .tile-inner {
+  background: linear-gradient(160deg, #3d8b6a, #24614a);
+  border: 1px solid #f3e9d2;
+  border-bottom-width: 3px;
+  border-radius: 3px;
+}
+.tile.dim {
+  opacity: 0.4;
+}
+.tile.clickable {
+  cursor: pointer;
+  transition: transform 0.08s;
+}
+.tile.clickable:hover {
+  transform: translateY(-8px);
+}
+.tile.mark-hint .tile-inner {
+  outline: 3px solid var(--accent);
+  outline-offset: -1px;
+  border-radius: 4px;
+}
+.tile.mark-hint {
+  transform: translateY(-5px);
+}
+.tile.mark-last .tile-inner {
+  outline: 2px solid var(--warn);
+  border-radius: 3px;
+}
+.tiles {
+  display: inline-flex;
+  gap: 1px;
+  align-items: flex-end;
+}
+.tiles.inline {
+  vertical-align: middle;
+  margin: 0 2px;
+}
+.tiles.inline .tile {
+  --w: 17px;
+}
+
+/* ---------- 牌桌 ---------- */
+.game {
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  height: 100vh;
+}
+.main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px;
+  overflow: hidden;
+}
+.board {
+  position: relative;
+  width: var(--B);
+  height: var(--B);
+  background: radial-gradient(circle, var(--felt) 0%, var(--felt-dark) 100%);
+  border-radius: 12px;
+  box-shadow: inset 0 0 24px #0008;
+  flex: none;
+}
+.layer {
+  position: absolute;
+  inset: 0;
+  transform-origin: 50% 50%;
+  pointer-events: none;
+}
+.layer > * {
+  pointer-events: auto;
+}
+.river {
+  position: absolute;
+  top: calc(var(--B) * 0.665);
+  left: calc(var(--B) * 0.335);
+  display: flex;
+  flex-direction: column;
+}
+.river .tile {
+  --w: calc(var(--B) * 0.055);
+}
+.river-row {
+  display: flex;
+  align-items: flex-end;
+  white-space: nowrap;
+}
+.tile.tsumogiri .tile-inner {
+  filter: brightness(0.86);
+}
+.opp-area {
+  position: absolute;
+  bottom: calc(var(--B) * 0.01);
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  gap: calc(var(--B) * 0.02);
+}
+.opp-hand {
+  display: flex;
+  align-items: flex-end;
+}
+.opp-hand .tile,
+.layer .melds .tile {
+  --w: calc(var(--B) * 0.042);
+}
+.opp-hand .drawn {
+  margin-left: calc(var(--B) * 0.01);
+}
+.melds {
+  display: flex;
+  gap: 6px;
+  align-items: flex-end;
+}
+.meld {
+  display: inline-flex;
+  align-items: flex-end;
+}
+.called-stack {
+  display: inline-flex;
+  flex-direction: column;
+}
+.called-stack .tile.sideways {
+  height: var(--w);
+}
+.seat-label {
+  position: absolute;
+  top: calc(var(--B) * 0.6);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: calc(var(--B) * 0.026);
+  color: #e8f5e9;
+  padding: 1px 10px;
+  border-radius: 10px;
+}
+.seat-label.turn {
+  background: #ffffff22;
+}
+.seat-label .wind {
+  font-weight: bold;
+}
+.riichi-stick {
+  position: absolute;
+  top: calc(var(--B) * 0.645);
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(var(--B) * 0.08);
+  height: 6px;
+  border-radius: 3px;
+  background: #fff;
+}
+.riichi-stick::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 4px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bad);
+  transform: translate(-50%, -50%);
+}
+.opp-area .name {
+  color: #b9d7c8;
+  font-size: calc(var(--B) * 0.02);
+  max-width: calc(var(--B) * 0.12);
+  align-self: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.center {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: calc(var(--B) * 0.27);
+  height: calc(var(--B) * 0.17);
+  transform: translate(-50%, -50%);
+  background: #0e2a20;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: calc(var(--B) * 0.022);
+  color: #e8f5e9;
+}
+.center .round {
+  font-size: calc(var(--B) * 0.03);
+  font-weight: bold;
+}
+.center .sticks {
+  display: flex;
+  gap: 10px;
+  color: #b9d7c8;
+}
+.center .wall {
+  color: #b9d7c8;
+}
+.center .dora {
+  display: flex;
+  gap: 1px;
+}
+.center .dora .tile {
+  --w: calc(var(--B) * 0.03);
+}
+
+/* ---------- 自己的手牌 ---------- */
+.my-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+.actions {
+  min-height: 38px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.actions .act {
+  font-size: 1.05em;
+  padding: 6px 16px;
+  position: relative;
+}
+.actions .act.riichi,
+.actions .act.tsumo,
+.actions .act.ron {
+  background: #b71c1c;
+  border-color: #e57373;
+}
+.actions .act.riichi.on {
+  background: #ef6c00;
+}
+.actions .act.hinted {
+  outline: 3px solid var(--accent);
+}
+.hint-dot {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 10px;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--accent);
+}
+.actions .note {
+  color: var(--warn);
+}
+.my-hand {
+  display: flex;
+  align-items: flex-end;
+  gap: 0;
+  min-height: calc(min(46px, var(--B) * 0.075) * 4 / 3 + 10px);
+  padding-top: 8px;
+}
+.my-hand .tile {
+  --w: min(46px, calc(var(--B) * 0.075));
+}
+.my-hand .hand-tiles {
+  display: flex;
+}
+.my-hand .drawn {
+  margin-left: 12px;
+  display: flex;
+}
+.my-hand .melds {
+  margin-left: 20px;
+}
+.my-hand .melds .tile {
+  --w: min(36px, calc(var(--B) * 0.055));
+}
+
+/* ---------- 側欄 ---------- */
+.side {
+  background: var(--panel);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+}
+.controls {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.controls label {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.controls input[type="range"] {
+  width: 90px;
+}
+.panel {
+  background: var(--panel-2);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.panel h3 {
+  margin: 0 0 6px;
+  font-size: 1em;
+}
+.hint {
+  border-left: 4px solid var(--accent);
+  max-height: 45vh;
+  overflow: auto;
+}
+.hint .decision .kind {
+  font-weight: bold;
+  margin-top: 4px;
+}
+.hint ul,
+.review-detail ul {
+  margin: 4px 0;
+  padding-left: 18px;
+  line-height: 1.6;
+}
+.log {
+  flex: 1;
+  overflow: auto;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.log-line.ev-draw {
+  display: none;
+}
+.log-line.ev-win,
+.log-line.ev-ryuukyoku {
+  color: var(--warn);
+}
+.log-line.ev-start_kyoku {
+  color: var(--accent);
+}
+.seed {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ---------- 對話框 ---------- */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: #000a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+.dialog {
+  background: var(--panel);
+  border-radius: 12px;
+  padding: 20px 28px;
+  min-width: 360px;
+  max-width: 90vw;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+}
+.dialog h2,
+.dialog h3 {
+  margin: 0;
+}
+.win-hand {
+  display: flex;
+  align-items: flex-end;
+}
+.win-hand .tile {
+  --w: 38px;
+}
+.win-hand .win-tile {
+  margin-left: 10px;
+}
+.win-hand .melds {
+  margin-left: 14px;
+}
+.yaku td,
+.deltas td,
+.final td {
+  padding: 2px 12px;
+}
+.yaku td:last-child,
+.deltas td:last-child,
+.final td:last-child {
+  text-align: right;
+}
+.value {
+  font-size: 1.2em;
+  font-weight: bold;
+}
+.ura {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.ura .tile {
+  --w: 24px;
+}
+tr.me {
+  color: var(--accent);
+  font-weight: bold;
+}
+.plus {
+  color: var(--good);
+}
+.minus {
+  color: var(--bad);
+}
+.buttons {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+/* ---------- 設定 ---------- */
+.setup {
+  max-width: 720px;
+  margin: 40px auto;
+  padding: 0 20px;
+}
+.setup h1 {
+  margin-bottom: 4px;
+}
+.lead {
+  color: var(--muted);
+  line-height: 1.6;
+}
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 20px 0;
+}
+.form label {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 4px 12px;
+  align-items: center;
+}
+.form .desc {
+  grid-column: 2;
+  font-size: 13px;
+  color: var(--muted);
+}
+.loading {
+  padding: 40px;
+  color: var(--muted);
+}
+
+/* ---------- 復盤 ---------- */
+.review:not(.setup) {
+  display: grid;
+  grid-template-columns: minmax(420px, 1fr) minmax(400px, 1fr);
+  height: 100vh;
+}
+.review-list {
+  overflow: auto;
+  padding: 12px 18px;
+}
+.review-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.review-head h1 {
+  margin: 0;
+}
+.summary {
+  border-collapse: collapse;
+  font-size: 14px;
+  margin: 8px 0;
+}
+.summary th,
+.summary td {
+  padding: 3px 10px;
+  border-bottom: 1px solid #3a4350;
+  text-align: right;
+}
+.summary td:first-child,
+.summary th:first-child {
+  text-align: left;
+}
+.decisions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.review-item {
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  border-left: 4px solid #555;
+}
+.review-item.mistake {
+  border-left-color: var(--bad);
+}
+.review-item.better {
+  border-left-color: var(--good);
+}
+.review-item.diff {
+  border-left-color: var(--warn);
+}
+.review-item.selected {
+  background: var(--panel-2);
+  outline: 1px solid var(--accent);
+}
+.review-item .where {
+  font-size: 13px;
+  color: var(--muted);
+}
+.review-item .choices {
+  margin-top: 2px;
+}
+.review-item .ev {
+  color: var(--muted);
+  font-size: 13px;
+}
+.badge {
+  font-size: 12px;
+  border-radius: 8px;
+  padding: 0 6px;
+  margin-left: 6px;
+  background: #555;
+  color: #fff;
+}
+.badge.mistake {
+  background: var(--bad);
+}
+.badge.better {
+  background: var(--good);
+}
+.badge.diff {
+  background: #8d6e3f;
+}
+.badge.type {
+  background: #37474f;
+}
+.review-detail {
+  background: var(--panel);
+  padding: 12px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.review-detail .mini {
+  --B: min(440px, calc(50vw - 60px));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.review-detail .options td {
+  padding: 2px 10px;
+}
+
+.efficiency {
+  margin-top: 6px;
+  font-size: 13px;
+}
+.efficiency summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.efficiency td {
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+.efficiency td .tile {
+  --w: 17px;
+}
+.efficiency .tiles.inline .tile {
+  --w: 13px;
+}
+
+.error-text {
+  color: #ff8a80;
+}

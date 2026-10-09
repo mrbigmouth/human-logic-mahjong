@@ -47,6 +47,26 @@
 4. **常駐預測** ✅（提前完成）：`book.predict_each_turn` 登記「每回合都執行」的預測函式，即使決策沒用到也能被評估（`predict::tenpai` 已使用）。
 5. **預測報告**：依情境（巡目、副露數、是否立直）分組的準確度。
 
+### M9 細項
+
+依「核心 API → 瀏覽器開發 → 桌面打包」的順序（開發容器沒有 GUI，見 [02](02-architecture.md) 的「跨平台建置」）：
+
+1. **`mj-app`：對局 session**（Tauri 與 `mj serve` 共用，與 UI 無關）
+   - 人類一個座位、其餘座位是策略或 mjai AI；對局在背景執行緒進行，輪到人類時暫停等待動作；
+   - 即時提示：策略在人類座位旁觀，每次詢問附上策略的選擇與理由（`ctx.note`）；
+   - 給 UI 的牌桌狀態：人類視角的事件，每個事件附一份牌桌（前端只要依序畫出來，不必自己推算）；一局結束時公開和牌者的手牌；
+   - 對局後復盤：完整紀錄轉成牌譜，以 `mj-review` 復盤人類座位（背景執行、可查進度）。
+2. **`mj serve`**：HTTP JSON API（建立對局、取得新事件（長輪詢）、送出動作、復盤）＋前端靜態檔；容器內 `http://localhost:30100`。
+3. **前端 `app/`**（Vite＋React＋TypeScript）：牌桌、打牌與鳴牌操作、提示開關、每局結果、終局與復盤畫面（逐手比較、理由、反事實期望值、失誤統計）。牌圖使用 [FluffyStuff/riichi-mahjong-tiles](https://github.com/FluffyStuff/riichi-mahjong-tiles)（CC0）。
+4. **Tauri 桌面殼 `app/src-tauri`**：以 Tauri command 直接呼叫 `mj-app`；GitHub Actions 在三平台建置安裝檔；在 Mac 上實際安裝驗證。
+
+進度（2026-10-09）：
+
+- 1–3 完成。`mj-app` 的測試以測試執行緒扮演人類、照提示打完整場：除錯建置時每次詢問都比對由事件推算的牌桌與引擎的 `PlayerView`（60 場 fuzz 建置對局無差異），照提示打的對局復盤時與策略 100% 一致。
+- 瀏覽器（Playwright）實際打完半莊（10 局）→ 終局 → 復盤；對手含 Mortal S42 時也能正常進行。
+- 4：Tauri 專案、圖示、`.github/workflows/desktop.yml`（macOS arm64／x86_64、Windows、Linux）已完成；容器內建置出 Linux 的 deb（3 MB），在 xvfb 中啟動並開局，API 走 Tauri command 正常。
+- 尚未驗收：三平台安裝檔（需推送到 GitHub 執行 workflow）與 Mac 上的實際安裝。
+
 ## M1 完成內容
 
 - `mj-core`：`Pai`（赤寶牌）、`Meld`（吃、碰、明槓、暗槓、加槓）。

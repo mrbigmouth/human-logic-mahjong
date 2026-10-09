@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "主視窗的權限（只用到自訂的 api command）",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

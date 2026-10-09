@@ -5,7 +5,7 @@
 | 部分 | 選擇 | 理由 |
 |---|---|---|
 | 核心（規則、計算、策略、模擬） | **Rust**（Cargo workspace） | 自我對戰需要大量模擬；速度接近 C++ 且記憶體安全；可以編譯成 WASM |
-| 桌面 UI | **Tauri v2** ＋ TypeScript | 一套程式碼打包 Windows / macOS / Linux，執行檔小，可直接呼叫 Rust |
+| 桌面 UI | **Tauri v2** ＋ React ＋ TypeScript（Vite） | 一套程式碼打包 Windows / macOS / Linux，執行檔小，可直接呼叫 Rust；同一份前端也能在瀏覽器（`mj serve`）執行 |
 | 策略 | Rust 的 if／else 決策函式（`strategy-list` 目錄） | 判斷直接寫成人類讀得懂的程式，理由用 `ctx.note` 寫在判斷旁邊；計算交給 `mj-tools` |
 | 外部 AI 對接 | mjai 協定（JSON over stdio/TCP） | 社群標準，可以和 Mortal、akochan 等 AI 對戰 |
 
@@ -16,7 +16,8 @@ mj-core ── mj-calc ── mj-rules ── mj-engine ── mj-tools ── m
                                      │                                            └─ mj-review
                                      └──────── mj-paifu（牌譜匯入、mjai 格式；mj-sim 使用）── mj-mjai（mj-review 使用）
 tools/mortal（AGPL，獨立）：Mortal 的 mjai 機器人，只以子行程經 mjai 協定溝通
-mj-cli / app(Tauri) ── 以上全部
+mj-review ── mj-app（對局 session、提示、牌桌狀態、復盤）── mj-cli（mj serve）／app/src-tauri（桌面版）
+mj-cli ── 以上全部
 ```
 
 | Crate | 職責 | 里程碑 |
@@ -32,7 +33,8 @@ mj-cli / app(Tauri) ── 以上全部
 | `mj-tuner` | 可調參數（`Param`）的自動調整：預測以牌譜上的對數損失（黃金分割）、決策以 duplicate 對戰（`mj tune`） | M8 ✅ |
 | `mj-review` | 牌譜復盤：逐手比對玩家與策略的選擇，附理由；選擇不同處在牌譜局面做反事實評估（玩家 vs 策略的成對差值）；差異分類與失誤彙整（`mj review`）；可掛 mjai AI 一起旁觀，算三方一致率（`mj agree`、`mj review --mjai`） | M7 ✅ / M8 |
 | `mj-mjai` | mjai 協定：`MjaiPlayer` 讓外部 AI（子行程，`PooledBot` 在對局間重複使用）上桌，或以旁觀模式記錄它的選擇；內建測試機器人（`mj mjai-bot`）；事件轉換與 mjai 牌譜匯入在 `mj_paifu::mjai`。Mortal 在 `tools/mortal/` | M8 ✅ |
-| `mj-cli` | 執行檔 `mj`：`strategies`、`nanikiru`、`selfplay`、`import`、`predict-eval`、`evaluate`、`simulate`、`review`、`agree`、`tune`、`params`、`mjai-bot`、`play`、`serve` | 持續 |
+| `mj-app` | 練習 App 的核心：人機對戰的 `Session`（背景執行緒、等待人類動作）、即時提示（策略旁觀人類座位）、給 UI 的牌桌狀態（每個事件一幀）、對局後復盤；`App::call` 是 UI 唯一的入口 | M9 |
+| `mj-cli` | 執行檔 `mj`：`strategies`、`nanikiru`、`selfplay`、`import`、`predict-eval`、`evaluate`、`simulate`、`review`、`agree`、`tune`、`params`、`mjai-bot`、`serve` | 持續 |
 
 ## 關鍵設計
 
@@ -60,9 +62,13 @@ mj-cli / app(Tauri) ── 以上全部
 - 策略可以掛在 `ScriptedPlayer` 上「旁觀」：收到同樣的事件與詢問、做出預測，但動作照牌譜，用來評估對真人的讀牌準確度。
 
 ### UI 與核心的介面
-UI 只透過一層 API（`new_game`、`act`、`get_view`、`analyze`）和核心溝通：
-- 桌面版：Tauri command 直接呼叫 Rust。
-- 開發和網頁版：`mj serve` 提供 HTTP API（容器內用 port 30100，瀏覽器開 `http://localhost:30100`）；之後核心也可以編成 WASM，完全在前端執行。
+UI 只透過 `mj_app::App::call(名稱, JSON 參數)` 和核心溝通（`strategies`、`entrants`、`new_game`、`poll`、`act`、`start_review`、`review`、`log`，說明在 `crates/mj-app/src/api.rs`）：
+- 桌面版：Tauri command `api(name, args)` 直接呼叫它。
+- 開發和網頁版：`mj serve` 把 `POST /api/<名稱>` 轉給它，並提供前端檔案（容器內用 port 30100，瀏覽器開 `http://localhost:30100`）；之後核心也可以編成 WASM，完全在前端執行。
+
+對局在核心的背景執行緒進行：引擎詢問人類時暫停，等 UI 送來動作。UI 以長輪詢（`poll`）取得新的「幀」——人類視角的事件，加上這個事件之後的完整牌桌（手牌、牌河、副露、點數），
+所以前端不必自己推算局面，只要依序畫出來；詢問附上合法動作（以編號回答）與即時提示（策略的選擇、理由、牌效表）。
+牌桌由事件推算，除錯建置時每次詢問都和引擎的 `PlayerView` 比對（`crates/mj-app/tests/session.rs`）。
 
 ### 跨平台建置
 Tauri 打包要在目標平台或 CI 上進行（GitHub Actions 三平台 matrix）。開發容器沒有 GUI，所以 UI 先用瀏覽器開發，最後在 Mac 上打包驗證。

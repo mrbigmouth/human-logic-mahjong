@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Human Logic Mahjong",
+  "version": "0.1.0",
+  "identifier": "io.github.mrbigmouth.human-logic-mahjong",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:30101",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Human Logic Mahjong",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 1000,
+        "minHeight": 700
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "BoardGame",
+    "shortDescription": "可解釋的日本立直麻將 AI 練習軟體"
+  }
+}

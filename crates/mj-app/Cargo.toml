@@ -1,0 +1,20 @@
+[package]
+name = "mj-app"
+description = "Play sessions for the practice app: human vs AI, live hints, table state for the UI, post-game review"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mj-core.workspace = true
+mj-engine.workspace = true
+mj-rules.workspace = true
+mj-strategy.workspace = true
+mj-sim.workspace = true
+mj-paifu.workspace = true
+mj-review.workspace = true
+mj-mjai.workspace = true
+mj-tools.workspace = true
+serde.workspace = true
+serde_json.workspace = true

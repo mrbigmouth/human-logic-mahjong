@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 可解釋的日本立直麻將 AI：把人類打麻將的思路寫成**人類讀得懂的 if／else 決策程式**，
 用兩種獨立的評分改進（預測看全知視角下的準確度、決策看反事實模擬的期望值），
-最終做成能復盤並說明「為什麼」的練習軟體。Rust workspace；桌面 UI（Tauri）尚未開始（M9）。
+最終做成能復盤並說明「為什麼」的練習軟體。Rust workspace；練習 App 的前端在 `app/`（Vite＋React＋TypeScript，桌面版 Tauri 在 `app/src-tauri/`）。
 
 - 與使用者溝通、文件、**程式註解一律使用繁體中文**。
 - 函式與型別名稱多為日語羅馬拼音（shanten 向聽、ukeire 進張、kuikae 食替、furiten 振聽……），對照表在 `docs/05-glossary.md`。牌的記法：`m` 萬、`p` 筒、`s` 索、`z` 字（1z–7z = 東南西北白發中）、`0m/0p/0s` 赤五。
@@ -32,7 +32,7 @@ M2.5 重構後的開發循環是「寫判斷 → 評估（預測看準確度、�
 | M6 | 策略 | 讀牌：聽牌、聽牌張、打點預測（手切摸切、牌河順序、副露），以天鳳牌譜校準（`hand-reading`） | ✅ |
 | M7 | 產品 | 復盤（CLI／JSON）：使用者牌譜逐手比對，附策略理由與反事實期望值、失誤統計（`mj review`） | ✅ |
 | M8 | 評估 | 具名可調參數與自動調整（`mj tune`）；mjai 介接（`mj-mjai`）；與強 AI（Mortal）對戰與一致率（`mj agree`） | ✅ |
-| M9 | 產品 | Tauri 桌面練習 App（人機對戰、即時提示、對局後復盤）；`mj serve` | |
+| M9 | 產品 | Tauri 桌面練習 App（人機對戰、即時提示、對局後復盤）；`mj serve` | 進行中 |
 | M10 | 策略 | 印象操作（詐騙與反詐騙） | |
 
 ## 常用指令
@@ -68,6 +68,17 @@ mj selfplay --seats "mjai:<外部程式 參數>,greedy,..."                # 說
 mj simulate tenhou-normal-4p-hanchan/hand-reading "mjai:tools/mortal/run.sh s42" --blocks 150   # 與 Mortal 對戰（安裝：tools/mortal/setup.sh）
 mj agree data/tenhou --mjai "tools/mortal/run.sh s42"               # 一致率：策略、玩家、Mortal 的選擇（--selfplay N 改用自我對戰的局面）
 mj review <牌譜> --player <名稱> --mjai "tools/mortal/run.sh s42"     # 復盤附 Mortal 的選擇（--show ai 只列與 Mortal 不同的決策）
+mj serve                                                            # 練習 App 網頁版：http://localhost:30100（前端要先建置）
+```
+
+練習 App（`app/`）：
+
+```sh
+cd app && npm install
+npm run build                 # tsc 型別檢查＋輸出到 app/dist（mj serve 提供這些檔案）
+npm run dev                   # 開發：http://localhost:30101，/api 轉給 mj serve（30100）
+npm run tauri dev             # 桌面版（需要 webkit2gtk 等系統套件，容器內已安裝；沒有 GUI 只能建置）
+npm run tauri build           # 桌面版安裝檔；三平台由 .github/workflows/desktop.yml 建置
 ```
 
 - 天鳳牌譜用 `tools/fetch-tenhou.sh <YYYYMMDDHH ...> -n <每小時場數>` 下載到 `data/tenhou/`（已 gitignore；天鳳只保留最近幾天的每小時清單）。
@@ -79,7 +90,7 @@ mj review <牌譜> --player <名稱> --mjai "tools/mortal/run.sh s42"     # 復�
 ## 架構
 
 Crate 相依鏈：`mj-core → mj-calc → mj-rules → mj-engine → mj-tools → mj-strategy → mj-sim → mj-cli`，
-另有 `mj-engine → mj-paifu → mj-sim`、`mj-sim, mj-paifu → mj-review／mj-tuner → mj-cli`、`mj-paifu → mj-mjai → mj-review, mj-cli`。
+另有 `mj-engine → mj-paifu → mj-sim`、`mj-sim, mj-paifu → mj-review／mj-tuner → mj-cli`、`mj-paifu → mj-mjai → mj-review, mj-cli`、`mj-review → mj-app → mj-cli（mj serve）, app/src-tauri`。
 
 - **mj-core**：`Tile`（34 種，編號 0–33）、`Pai`（牌＋赤五旗標）、`TileCounts`（34 格牌數表，計算都用它）、`Meld`。
 - **mj-calc**：精確向聽（各花色 DP，thread-local 快取）、進張、聽牌張、和牌拆解。與規則無關。
@@ -102,6 +113,8 @@ Crate 相依鏈：`mj-core → mj-calc → mj-rules → mj-engine → mj-tools �
 - **mj-tuner**（M8）：座標搜尋調整 `Param`：預測以牌譜上的對數損失（黃金分割）、決策以 duplicate（候選值與目前值直接對戰，好過 2 個標準誤才採用）。
 - **mj-mjai**（M8）：`MjaiPlayer` 讓說 mjai 協定的 AI 上桌（`Bot` trait；`ProcessBot` = 子行程，一行事件陣列／一行回應，與 mjai.app 相同；立直兩段式；搶槓前補送槓事件）；`PooledBot` 在對局之間重複使用行程；`shadow()` 旁觀模式只記錄選擇，立直改用擴充請求 `mj_peek` 問要打的牌；`bots` 內建簡單機器人。事件與牌的轉換、mjai 牌譜匯入在 `mj_paifu::mjai`（引擎完整紀錄 ↔ mjai 牌譜可來回轉換）。只透過協定溝通，外部 AI 的授權（如 AGPL）不影響本專案。
 - **tools/mortal**（AGPL-3.0-or-later，與專案隔離）：Mortal 的 mjai 包裝（`run.sh s42|hhim8826`）、安裝腳本 `setup.sh`（uv 的 Python 3.12 venv、固定版本的 Mortal 原始碼與 libriichi、權重 SHA-256 檢查，都放在 gitignore 的 `data/mortal/` 與 `tools/mortal/.venv/`）。每個 Mortal 行程約 380 MB；用到 mjai AI 時 `--jobs` 預設依可用記憶體決定。
+- **mj-app**（M9）：練習 App 的核心，與 UI 無關。`Session` 在背景執行緒進行一場對局（人類座位 `HumanSeat` 詢問時暫停，等 `act`；提示策略在人類座位旁觀，每次詢問附上策略的選擇、理由與牌效表）；`table::TableBuilder` 把人類視角的事件轉成「事件＋牌桌」的幀（除錯建置時每次詢問都與引擎的 `PlayerView` 比對）；對局後轉成牌譜交給 `mj-review` 復盤。`api::App::call(名稱, JSON)` 是 UI 唯一的入口：`mj serve` 的 `POST /api/<名稱>` 與 Tauri 的 `api` command 都轉給它，前端 `app/src/api.ts` 依環境選一種。修改 JSON 結構時同步更新 `app/src/types.ts`。
+- **app/**（M9）：前端。`Game.tsx` 長輪詢 `poll` 取得新幀並依序播放（一局結果停下等「繼續」），詢問要等播放追上才顯示；`Board.tsx` 每家畫成坐在下方再旋轉；`Review.tsx` 復盤（點決策看當時牌桌，靠 `ask.id - 1 = act_index` 對應幀）。牌圖是 FluffyStuff 的 CC0 素材（`app/public/tiles/`）。
 - **mj-sim**：參考機器人（`RandomBot`、`GreedyBot`）；`replay`（從完整事件紀錄重建任一時刻的手牌、判定振聽）；`predict_eval`（用 `judge` 判定每個 `Claim` 的真相，算 Brier、技巧分數、校準表，依被預測者情境分組；`collect_records` 在牌譜上旁觀評估）；`counterfactual`（快照 → 重抽 R 個世界 → 各選項以 `Force` 強制後重打，名次點或本局點數，自動加重打）；`duplicate`（同牌山座位輪換的成對比較）；`read_stats`（`mj read-stats`：在牌譜每個打牌時點輸出對手的讀牌特徵＋真相 CSV，用來校準讀牌預測）。
 
 ### 重要的不變條件

@@ -51,6 +51,11 @@ tools/fetch-tenhou.sh 2026100700 2026100701 -n 20
 # 復盤：逐手比較牌譜中某位玩家與策略的選擇（理由、反事實期望值、失誤統計）
 ./target/release/mj review data/tenhou/<牌譜>.xml --player <名稱> --json review.json
 
+# 練習 App（網頁版）：建置前端後啟動，瀏覽器開 http://localhost:30100
+(cd app && npm install && npm run build)
+./target/release/mj serve
+# 桌面版（需要 Tauri 的系統相依套件）：cd app && npm run tauri dev｜npm run tauri build
+
 # fuzz 建置：每回合檢查牌數與點數守恆
 cargo build --profile fuzz -p mj-cli
 ./target/fuzz/mj selfplay --games 1 --dump game.jsonl  # 輸出完整事件紀錄
@@ -73,9 +78,10 @@ crates/
   mj-paifu     牌譜匯入（天鳳 mjlog XML／JSON）：引擎重播、比對點數、重建每個決策點的視角
   mj-review    復盤：逐手比對玩家與策略、反事實評估、失誤統計（M7）
   mj-mjai      mjai 協定（和外部 AI 對戰）
+  mj-app       練習 App 的核心：人機對戰、即時提示、給 UI 的牌桌狀態、對局後復盤（M9）
   mj-cli       命令列工具 mj
 docs/          設計文件
 tools/oracle/  點數差異測試（Python）
 tools/fetch-tenhou.sh  天鳳牌譜下載（存到 data/tenhou/，不納入版本控制）
-app/           （M9）Tauri 桌面 UI
+app/           練習 App 的前端（Vite＋React＋TypeScript）；app/src-tauri 是桌面版（Tauri）
 ```

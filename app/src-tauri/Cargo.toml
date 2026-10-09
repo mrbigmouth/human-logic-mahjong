@@ -1,0 +1,23 @@
+[package]
+name = "mj-desktop"
+description = "Human Logic Mahjong desktop practice app (Tauri)"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.85"
+
+# 不屬於根目錄的 workspace（Tauri 在 Linux 上需要 webkit2gtk 等系統套件，
+# 不讓 `cargo build --workspace` 依賴它們）。
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+mj-app = { path = "../../crates/mj-app" }
+tauri = { version = "2", features = [] }
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

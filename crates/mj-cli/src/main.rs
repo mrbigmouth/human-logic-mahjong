@@ -7,6 +7,7 @@ mod nanikiru;
 mod predict_eval;
 mod review;
 mod selfplay;
+mod serve;
 mod simulate;
 mod tune;
 
@@ -265,13 +266,17 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         seed: u64,
     },
-    /// 在終端機與 AI 對戰（M9）
-    Play { strategy: String },
-    /// 以 HTTP 提供 UI 用的 API，供瀏覽器開發（M9）
+    /// 練習 App 的網頁版：以 HTTP 提供 UI 的 API（`POST /api/<名稱>`）與前端檔案（M9）
     Serve {
         /// 監聽的 port（容器對外開放 30100–30300）
         #[arg(long, default_value_t = 30100)]
         port: u16,
+        /// 監聽的位址
+        #[arg(long, default_value = "0.0.0.0")]
+        host: String,
+        /// 前端檔案目錄（`app/` 中 `npm run build` 的輸出）
+        #[arg(long, default_value = "app/dist")]
+        dir: PathBuf,
     },
 }
 
@@ -308,7 +313,7 @@ fn main() -> ExitCode {
             .build_global()
             .expect("rayon 執行緒池只建立一次");
     }
-    let milestone = match cli.command {
+    match cli.command {
         Command::Strategies { name } => {
             if let Some(name) = name {
                 let Some(s) = mj_strategy::find_strategy(&name) else {
@@ -333,39 +338,35 @@ fn main() -> ExitCode {
                     }
                 }
             }
-            return ExitCode::SUCCESS;
+            ExitCode::SUCCESS
         }
         Command::Nanikiru {
             hand,
             dora,
             strategy,
-        } => {
-            return exit(nanikiru::run(&nanikiru::Options {
-                hand: &hand,
-                dora: &dora,
-                strategy: &strategy,
-            }));
-        }
+        } => exit(nanikiru::run(&nanikiru::Options {
+            hand: &hand,
+            dora: &dora,
+            strategy: &strategy,
+        })),
         Command::Selfplay {
             games,
             seed,
             seats,
             no_rotate,
             dump,
-        } => return exit(selfplay::run(games, seed, &seats, !no_rotate, dump)),
+        } => exit(selfplay::run(games, seed, &seats, !no_rotate, dump)),
         Command::Import {
             paths,
             dump,
             show_errors,
-        } => return exit(import::run(&paths, dump, show_errors)),
+        } => exit(import::run(&paths, dump, show_errors)),
         Command::PredictEval {
             strategy,
             logs,
             games,
             seed,
-        } => {
-            return exit(predict_eval::run(&strategy, &logs, games, seed));
-        }
+        } => exit(predict_eval::run(&strategy, &logs, games, seed)),
         Command::Tune {
             strategy,
             params,
@@ -381,24 +382,22 @@ fn main() -> ExitCode {
             rounds,
             accept_z,
             out,
-        } => {
-            return exit(tune::run(&tune::Options {
-                strategy,
-                params,
-                objective,
-                source,
-                logs,
-                validate_logs,
-                baseline,
-                blocks,
-                seed,
-                validate_blocks,
-                validate_seed,
-                rounds,
-                accept_z,
-                out,
-            }));
-        }
+        } => exit(tune::run(&tune::Options {
+            strategy,
+            params,
+            objective,
+            source,
+            logs,
+            validate_logs,
+            baseline,
+            blocks,
+            seed,
+            validate_blocks,
+            validate_seed,
+            rounds,
+            accept_z,
+            out,
+        })),
         Command::MjaiBot { kind } => {
             let kind = match kind.as_str() {
                 "shanten" => mj_mjai::bots::Kind::Shanten,
@@ -410,7 +409,7 @@ fn main() -> ExitCode {
             };
             let mut bot = mj_mjai::bots::MjaiBot::new(kind);
             let stdin = std::io::stdin();
-            return exit(mj_mjai::serve(&mut bot, stdin.lock(), std::io::stdout()));
+            exit(mj_mjai::serve(&mut bot, stdin.lock(), std::io::stdout()))
         }
         Command::Params { strategy } => {
             let st = match mj_strategy::find_strategy_spec(&strategy) {
@@ -431,7 +430,7 @@ fn main() -> ExitCode {
                     p.name, p.default, p.min, p.max, p.doc
                 );
             }
-            return ExitCode::SUCCESS;
+            ExitCode::SUCCESS
         }
         Command::Review {
             logs,
@@ -454,7 +453,7 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            return exit(review::run(&review::Options {
+            exit(review::run(&review::Options {
                 logs,
                 strategy,
                 player,
@@ -466,7 +465,7 @@ fn main() -> ExitCode {
                 omniscient,
                 json,
                 mjai: mjai.map(|m| m.split_whitespace().map(String::from).collect()),
-            }));
+            }))
         }
         Command::Agree {
             logs,
@@ -475,16 +474,14 @@ fn main() -> ExitCode {
             selfplay,
             seed,
             json,
-        } => {
-            return exit(agree::run(&agree::Options {
-                logs,
-                mjai: mjai.split_whitespace().map(String::from).collect(),
-                strategy,
-                selfplay,
-                seed,
-                json,
-            }));
-        }
+        } => exit(agree::run(&agree::Options {
+            logs,
+            mjai: mjai.split_whitespace().map(String::from).collect(),
+            strategy,
+            selfplay,
+            seed,
+            json,
+        })),
         Command::ReadStats { logs, out } => {
             let (records, mut errors) = mj_paifu::load_all(&logs);
             let (tenpai, waits, replay_errors) = mj_sim::read_stats::collect_records(&records);
@@ -503,7 +500,7 @@ fn main() -> ExitCode {
                 tenpai.lines().count() - 1,
                 waits.lines().count() - 1
             );
-            return exit(r);
+            exit(r)
         }
         Command::Evaluate {
             strategy,
@@ -538,7 +535,7 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            return exit(evaluate::run(&evaluate::Options {
+            exit(evaluate::run(&evaluate::Options {
                 strategy: &strategy,
                 games,
                 seed,
@@ -550,17 +547,15 @@ fn main() -> ExitCode {
                 worst,
                 json,
                 kinds,
-            }));
+            }))
         }
         Command::Simulate {
             entrants,
             blocks,
             seed,
-        } => return exit(simulate::run(&entrants, blocks, seed)),
-        Command::Play { .. } | Command::Serve { .. } => "M9",
-    };
-    eprintln!("尚未實作（預計在 {milestone} 完成，見 docs/04-milestones.md）");
-    ExitCode::FAILURE
+        } => exit(simulate::run(&entrants, blocks, seed)),
+        Command::Serve { port, host, dir } => exit(serve::run(&host, port, &dir)),
+    }
 }
 
 /// 解析決策種類名稱。
