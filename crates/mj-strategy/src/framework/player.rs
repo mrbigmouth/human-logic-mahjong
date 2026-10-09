@@ -11,6 +11,7 @@ use super::book::Book;
 use super::choice::{CallChoice, DecisionKind, KanChoice, WinKind};
 use super::claim::ClaimRecord;
 use super::ctx::{Ctx, call_action, kan_action};
+use super::param::{Param, ParamSet};
 use mj_core::Pai;
 use mj_engine::{Action, Event, Player, PlayerView, Seat};
 use serde::{Deserialize, Serialize};
@@ -89,6 +90,8 @@ pub struct BookPlayer<M> {
     events_seen: usize,
     hand_index: u32,
     act_index: u32,
+    /// 可調參數的覆寫值
+    params: Arc<ParamSet>,
 }
 
 impl<M: Default> BookPlayer<M> {
@@ -103,7 +106,19 @@ impl<M: Default> BookPlayer<M> {
             events_seen: 0,
             hand_index: 0,
             act_index: 0,
+            params: Arc::default(),
         }
+    }
+
+    /// 使用這組參數覆寫值。
+    pub fn with_params(mut self, params: Arc<ParamSet>) -> Self {
+        self.params = params;
+        self
+    }
+
+    /// 建立一次決策的情境（帶上參數覆寫值）。
+    fn ctx<'v>(&self, view: &'v PlayerView, kind: DecisionKind) -> Ctx<'v> {
+        Ctx::new(view, kind).with_params(self.params.clone())
     }
 
     /// 取出目前累積的決策紀錄。
@@ -124,7 +139,7 @@ impl<M: Default> BookPlayer<M> {
         if !self.record {
             return;
         }
-        let mut ctx = Ctx::new(view, DecisionKind::Predict);
+        let mut ctx = self.ctx(view, DecisionKind::Predict);
         ctx.event_index = self.events_seen;
         f(&ctx, &mut self.mem);
         let (_, claims) = ctx.take_records();
@@ -196,7 +211,7 @@ impl<M: Default> BookPlayer<M> {
     /// 他家打牌（或加槓）時的回應。
     fn respond(&mut self, view: &PlayerView, legal: &[Action]) -> Action {
         if legal.contains(&Action::Ron) {
-            let ctx = Ctx::new(view, DecisionKind::Win).with_win(
+            let ctx = self.ctx(view, DecisionKind::Win).with_win(
                 if legal.len() == 2 && is_kan_robbery(view, legal) {
                     WinKind::Chankan
                 } else {
@@ -212,7 +227,7 @@ impl<M: Default> BookPlayer<M> {
             return Action::Pass;
         }
         let labels = calls.iter().map(|c| c.to_string()).collect();
-        let mut ctx = Ctx::new(view, DecisionKind::Call);
+        let mut ctx = self.ctx(view, DecisionKind::Call);
         ctx.calls = calls.clone();
         let c = self.step(ctx, &calls, labels, self.book.call, CallChoice::Pass);
         call_action(c)
@@ -222,13 +237,13 @@ impl<M: Default> BookPlayer<M> {
     fn own_turn(&mut self, view: &PlayerView, legal: &[Action]) -> Action {
         self.run_each_turn(view);
         if legal.contains(&Action::KyuushuKyuuhai) {
-            let ctx = Ctx::new(view, DecisionKind::Kyuushu);
+            let ctx = self.ctx(view, DecisionKind::Kyuushu);
             if self.yes_no(ctx, "繼續打", "流局", self.book.kyuushu, false) {
                 return Action::KyuushuKyuuhai;
             }
         }
         if legal.contains(&Action::Tsumo) {
-            let ctx = Ctx::new(view, DecisionKind::Win).with_win(WinKind::Tsumo);
+            let ctx = self.ctx(view, DecisionKind::Win).with_win(WinKind::Tsumo);
             if self.yes_no(ctx, "不和", "自摸", self.book.win, true) {
                 return Action::Tsumo;
             }
@@ -240,7 +255,7 @@ impl<M: Default> BookPlayer<M> {
                 .iter()
                 .map(|o| o.map_or("不槓".to_string(), |k| k.to_string()))
                 .collect();
-            let mut ctx = Ctx::new(view, DecisionKind::Kan);
+            let mut ctx = self.ctx(view, DecisionKind::Kan);
             ctx.kans = kans;
             if let Some(k) = self.step(ctx, &options, labels, self.book.kan, None) {
                 return kan_action(k);
@@ -252,7 +267,7 @@ impl<M: Default> BookPlayer<M> {
             candidates[0]
         } else {
             let labels = candidates.iter().map(|p| format!("打 {p}")).collect();
-            let mut ctx = Ctx::new(view, DecisionKind::Discard);
+            let mut ctx = self.ctx(view, DecisionKind::Discard);
             ctx.discards = candidates.clone();
             let f = self.book.discard.expect("策略必須登記何切（discard）決策");
             self.step(ctx, &candidates, labels, Some(f), candidates[0])
@@ -269,7 +284,9 @@ impl<M: Default> BookPlayer<M> {
                 tsumogiri: false,
             });
         if legal.contains(&Action::Riichi { pai, tsumogiri }) {
-            let ctx = Ctx::new(view, DecisionKind::Riichi).with_riichi_discard(pai);
+            let ctx = self
+                .ctx(view, DecisionKind::Riichi)
+                .with_riichi_discard(pai);
             if self.yes_no(ctx, "默聽", "立直", self.book.riichi, true) {
                 return Action::Riichi { pai, tsumogiri };
             }
@@ -441,6 +458,12 @@ pub trait Strategy: Send + Sync {
     }
     /// 建立一個玩家。`record` = 是否保留決策紀錄；`force` = 強制指定某次決策的選項。
     fn player(&self, record: bool, force: Option<Force>) -> Box<dyn StrategyPlayer>;
+    /// 這個策略的所有可調參數（建置腳本從原始碼中找出的 `Param` 常數）。
+    fn params(&self) -> &[Param];
+    /// 目前的參數覆寫值（空 = 全部用預設值）。
+    fn overrides(&self) -> &ParamSet;
+    /// 同一個策略、換一組參數覆寫值（覆寫的名稱必須是這個策略的參數）。
+    fn with_params(&self, overrides: ParamSet) -> Result<Box<dyn Strategy>, String>;
 }
 
 /// 策略玩家：可以上桌，也可以取出決策紀錄。
@@ -503,6 +526,8 @@ pub struct BookStrategy<M> {
     name: String,
     readme: &'static str,
     book: Arc<Book<M>>,
+    params: Arc<Vec<Param>>,
+    overrides: Arc<ParamSet>,
 }
 
 impl<M: Default + Clone + Send + 'static> Strategy for BookStrategy<M> {
@@ -515,16 +540,38 @@ impl<M: Default + Clone + Send + 'static> Strategy for BookStrategy<M> {
     }
 
     fn player(&self, record: bool, force: Option<Force>) -> Box<dyn StrategyPlayer> {
-        Box::new(BookPlayer::new(self.book.clone(), record, force))
+        Box::new(
+            BookPlayer::new(self.book.clone(), record, force).with_params(self.overrides.clone()),
+        )
+    }
+
+    fn params(&self) -> &[Param] {
+        &self.params
+    }
+
+    fn overrides(&self) -> &ParamSet {
+        &self.overrides
+    }
+
+    fn with_params(&self, overrides: ParamSet) -> Result<Box<dyn Strategy>, String> {
+        overrides.check(&self.params)?;
+        Ok(Box::new(BookStrategy {
+            name: self.name.clone(),
+            readme: self.readme,
+            book: self.book.clone(),
+            params: self.params.clone(),
+            overrides: Arc::new(overrides),
+        }))
     }
 }
 
 /// 用策略的 `register` 函式建立策略（由自動產生的程式碼呼叫）。
-/// `name` = 「規則／策略」，`readme` = 策略目錄的 `README.md`。
+/// `name` = 「規則／策略」，`readme` = 策略目錄的 `README.md`，`params` = 策略中的可調參數。
 pub fn book_strategy<M: Default + Clone + Send + 'static>(
     name: &str,
     readme: &'static str,
     register: fn(&mut Book<M>),
+    params: Vec<Param>,
 ) -> Box<dyn Strategy> {
     let mut book = Book::default();
     register(&mut book);
@@ -532,10 +579,19 @@ pub fn book_strategy<M: Default + Clone + Send + 'static>(
         book.discard.is_some(),
         "策略 {name} 沒有登記何切（discard）決策"
     );
+    for (i, p) in params.iter().enumerate() {
+        assert!(
+            params[..i].iter().all(|q| q.name != p.name),
+            "策略 {name} 有兩個參數都叫 {}",
+            p.name
+        );
+    }
     Box::new(BookStrategy {
         name: name.to_string(),
         readme,
         book: Arc::new(book),
+        params: Arc::new(params),
+        overrides: Arc::default(),
     })
 }
 

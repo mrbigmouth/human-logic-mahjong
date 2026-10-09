@@ -1,6 +1,6 @@
 [package]
 name = "mj-tuner"
-description = "Automatic weight tuning (CMA-ES) on top of mj-sim"
+description = "Automatic tuning of named strategy parameters on top of mj-sim"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,3 +9,5 @@ rust-version.workspace = true
 [dependencies]
 mj-sim.workspace = true
 mj-strategy.workspace = true
+mj-engine.workspace = true
+mj-paifu.workspace = true

@@ -32,15 +32,45 @@ pub const BASE: [[f64; 8]; 4] = [
     [0.50, 0.55, 0.77, 0.82, 0.82, 0.86, 0.86, 0.86],
 ];
 /// 最近 3 張中，每多 1 張手切（相對於 1 張），勝算乘上這個值。
-pub const PER_RECENT_TEDASHI: f64 = 0.73;
+pub const PER_RECENT_TEDASHI: Param = Param::new(
+    "tenpai.per_recent_tedashi",
+    0.73,
+    0.4,
+    1.0,
+    "最近 3 張每多 1 張手切的聽牌勝算倍數",
+);
 /// 最後一次手切的是中張牌（3–7）。
-pub const LAST_TEDASHI_MIDDLE: f64 = 1.44;
+pub const LAST_TEDASHI_MIDDLE: Param = Param::new(
+    "tenpai.last_tedashi_middle",
+    1.44,
+    1.0,
+    2.5,
+    "最後手切中張的聽牌勝算倍數",
+);
 /// 最後一次手切的是字牌。
-pub const LAST_TEDASHI_HONOR: f64 = 0.62;
+pub const LAST_TEDASHI_HONOR: Param = Param::new(
+    "tenpai.last_tedashi_honor",
+    0.62,
+    0.3,
+    1.0,
+    "最後手切字牌的聽牌勝算倍數",
+);
 /// 每 1 次連續摸切（最多算 4 次）。
-pub const PER_TRAILING_TSUMOGIRI: f64 = 1.12;
+pub const PER_TRAILING_TSUMOGIRI: Param = Param::new(
+    "tenpai.per_trailing_tsumogiri",
+    1.12,
+    1.0,
+    1.6,
+    "每次連續摸切的聽牌勝算倍數",
+);
 /// 每 1 位其他人立直（最多算 2 位）。
-pub const PER_OTHER_RIICHI: f64 = 0.67;
+pub const PER_OTHER_RIICHI: Param = Param::new(
+    "tenpai.per_other_riichi",
+    0.67,
+    0.3,
+    1.0,
+    "每位其他人立直的聽牌勝算倍數",
+);
 
 /// 常駐預測：每次輪到自己時，判斷其他三家是否聽牌（只為了評估預測準確度，不影響動作）。
 pub fn each_turn(ctx: &Ctx, mem: &mut Memory) {
@@ -88,15 +118,17 @@ pub fn estimate(ctx: &Ctx, _mem: &Memory, seat: Seat) -> f64 {
     let group = TURN_GROUP.iter().rposition(|&t| turn >= t).unwrap_or(0);
     let mut factor = 1.0;
     let tedashi = tools::river::recent_tedashi(v, seat, 3) as i32;
-    factor *= PER_RECENT_TEDASHI.powi(tedashi - 1);
+    factor *= ctx.param(&PER_RECENT_TEDASHI).powi(tedashi - 1);
     match tools::river::last_tedashi(v, seat) {
-        Some((_, pai)) if tools::river::is_middle(pai.tile) => factor *= LAST_TEDASHI_MIDDLE,
-        Some((_, pai)) if pai.tile.is_honor() => factor *= LAST_TEDASHI_HONOR,
+        Some((_, pai)) if tools::river::is_middle(pai.tile) => {
+            factor *= ctx.param(&LAST_TEDASHI_MIDDLE)
+        }
+        Some((_, pai)) if pai.tile.is_honor() => factor *= ctx.param(&LAST_TEDASHI_HONOR),
         _ => {}
     }
     let trail = tools::river::trailing_tsumogiri(v, seat).min(4) as i32;
-    factor *= PER_TRAILING_TSUMOGIRI.powi(trail);
+    factor *= ctx.param(&PER_TRAILING_TSUMOGIRI).powi(trail);
     let others_riichi = (0..4).filter(|&o| o != s && v.riichi[o]).count().min(2) as i32;
-    factor *= PER_OTHER_RIICHI.powi(others_riichi);
+    factor *= ctx.param(&PER_OTHER_RIICHI).powi(others_riichi);
     odds::scale(BASE[melds][group], factor)
 }

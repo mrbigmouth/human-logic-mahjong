@@ -86,7 +86,13 @@ pub const OPEN_HONOR: [f64; 3] = [0.051, 0.029, 0.001];
 /// 未立直者、他的役牌（副露者常以役牌對碰或單騎聽）。
 pub const OPEN_YAKUHAI: [f64; 3] = [0.11, 0.055, 0.003];
 /// 用過筋牌騙的人，筋牌的勝算再乘上這個值。
-pub const SUJI_TRAP: f64 = 2.5;
+pub const SUJI_TRAP: Param = Param::new(
+    "waits.suji_trap",
+    2.5,
+    1.0,
+    5.0,
+    "用過筋牌騙的人，筋牌的勝算倍數",
+);
 
 /// 威脅門檻：常駐預測只評估聽牌機率至少這麼高的人（和防守時提防的對象相近）。
 pub const EACH_TURN_MIN_TENPAI: f64 = 0.3;
@@ -148,7 +154,7 @@ pub fn estimate(ctx: &Ctx, mem: &Memory, seat: Seat, tile: Tile) -> f64 {
         tools::safety::Suji::Full => {
             factor *= f.suji;
             if mem.suji_trap_wins[s] > 0 {
-                factor *= SUJI_TRAP;
+                factor *= ctx.param(&SUJI_TRAP);
             }
             if riichi_tile_suji(v, seat, tile) {
                 factor *= f.riichi_tile_suji;

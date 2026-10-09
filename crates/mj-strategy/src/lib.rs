@@ -19,3 +19,23 @@ include!(concat!(env!("OUT_DIR"), "/strategy_list.rs"));
 pub fn find_strategy(name: &str) -> Option<Box<dyn framework::Strategy>> {
     all_strategies().into_iter().find(|s| s.name() == name)
 }
+
+/// 依「策略名稱＋參數覆寫」找策略：`名稱`、`名稱@參數檔`（每行一個「參數 = 值」）或
+/// `名稱@參數=值,參數=值`。例如 `tenhou-normal-4p-hanchan/hand-reading@call.far_shanten=3`。
+pub fn find_strategy_spec(spec: &str) -> Result<Box<dyn framework::Strategy>, String> {
+    let (name, overrides) = match spec.split_once('@') {
+        Some((n, o)) => (n, Some(o)),
+        None => (spec, None),
+    };
+    let st = find_strategy(name)
+        .ok_or_else(|| format!("找不到策略 {name}（用 `mj strategies` 查看可用的策略）"))?;
+    let Some(o) = overrides else {
+        return Ok(st);
+    };
+    let text = if o.contains('=') {
+        o.to_string()
+    } else {
+        std::fs::read_to_string(o).map_err(|e| format!("讀取參數檔 {o} 失敗：{e}"))?
+    };
+    st.with_params(framework::ParamSet::parse(&text)?)
+}

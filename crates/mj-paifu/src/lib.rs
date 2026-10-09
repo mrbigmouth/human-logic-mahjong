@@ -1,7 +1,7 @@
 //! 牌譜（paifu）匯入：把外部牌譜轉成本專案引擎的對局，之後的重播、預測評估、復盤都直接使用。
 //!
 //! 流程：
-//! 1. 解析：`tenhou_xml`（天鳳 mjlog XML）或 `tenhou_json`（天鳳 JSON，tenhou.net/6 格式）
+//! 1. 解析：`tenhou_xml`（天鳳 mjlog XML）、`tenhou_json`（天鳳 JSON，tenhou.net/6 格式）或 `mjai`（每行一個事件）
 //!    → 共通的 [`GameRecord`]（每局的配牌、依時間排序的摸牌與動作、寶牌指示牌、原牌譜的點數）。
 //! 2. 重播（[`replay`]）：由配牌與摸牌順序**還原每局的牌山**，再讓引擎實際打一次，
 //!    四家都是「照牌譜出牌」的玩家（[`replay::ScriptedPlayer`]）。
@@ -11,6 +11,7 @@
 //!    可以在每個決策點取得當時的 [`mj_engine::PlayerView`]（[`replay::DecisionPoint`]），
 //!    也可以讓策略「旁觀」（shadow）：策略收到同樣的事件與詢問，做出預測，但動作照牌譜。
 
+pub mod mjai;
 pub mod replay;
 pub mod tenhou_json;
 pub mod tenhou_xml;
@@ -92,8 +93,9 @@ pub fn load(path: &Path) -> Result<GameRecord, String> {
 pub fn parse(text: &str, id: &str) -> Result<GameRecord, String> {
     let mut rec = match text.trim_start().chars().next() {
         Some('<') => tenhou_xml::parse(text, id),
+        Some('{') if mjai::looks_like_mjai(text) => mjai::parse(text, id),
         Some('{') => tenhou_json::parse(text, id),
-        _ => Err("無法辨識的牌譜格式（只支援天鳳 mjlog XML 與 JSON）".into()),
+        _ => Err("無法辨識的牌譜格式（支援天鳳 mjlog XML、天鳳 JSON 與 mjai）".into()),
     }?;
     // 吃碰的兩張牌依牌排序，不同格式解析出的動作才會完全相同。
     for h in &mut rec.hands {
@@ -119,8 +121,12 @@ pub fn find_files(paths: &[std::path::PathBuf]) -> Vec<std::path::PathBuf> {
                 .map(|d| d.flatten().map(|e| e.path()).collect())
                 .unwrap_or_default();
             v.retain(|f: &std::path::PathBuf| {
-                f.extension()
-                    .is_some_and(|e| e == "xml" || e == "mjlog" || e == "json")
+                f.extension().is_some_and(|e| {
+                    matches!(
+                        e.to_str(),
+                        Some("xml" | "mjlog" | "json" | "jsonl" | "mjson")
+                    )
+                })
             });
             v.sort();
             out.extend(v);

@@ -18,9 +18,25 @@ use crate::prelude::*;
 
 /// 我和牌時，除了手牌的點數，還能阻止每一家威脅和牌（他的和牌本來可能自摸、讓我也付點數），
 /// 每家威脅算這麼多點的額外好處。
-pub const DENY_VALUE: f64 = 3000.0;
+pub const DENY_VALUE: Param = Param::new(
+    "discard.deny_value",
+    3000.0,
+    0.0,
+    8000.0,
+    "和牌時阻止每家威脅和牌的價值（點）",
+);
 /// 供託（場上的立直棒）每根 1000 點，和牌者拿走。
 pub const STICK_VALUE: f64 = 1000.0;
+/// 押引時「和牌機率 × 價值」的權重。`predict::win` 以牌譜校準成準確的機率後，
+/// 公式本身的偏差（例如沒有計入棄和後仍可能流局聽牌、名次的影響）要在決策這一側修正：
+/// 這個權重用 duplicate 對戰調整，預測的參數則用牌譜的對數損失調整，兩者分開。
+pub const WIN_WEIGHT: Param = Param::new(
+    "discard.win_weight",
+    1.0,
+    0.2,
+    2.0,
+    "押引時和牌期望值的權重",
+);
 
 /// 回傳要打的牌（必須是 `ctx.discard_candidates()` 之一）。
 pub fn decide(ctx: &Ctx, mem: &mut Memory) -> Pai {
@@ -66,12 +82,14 @@ struct Option_ {
     deal_in: f64,
     /// 預期放銃損失（點）
     loss: f64,
+    /// 和牌期望值的權重（[`WIN_WEIGHT`]）
+    weight: f64,
 }
 
 impl Option_ {
     /// 這張牌的價值（點）。
     fn score(&self) -> f64 {
-        self.p_win * self.value - self.loss
+        self.weight * self.p_win * self.value - self.loss
     }
 }
 
@@ -98,8 +116,11 @@ fn push_or_fold(
     ctx.note(format!("有威脅：{}", who.join("、")));
     // 和牌的額外好處：拿走供託、阻止威脅和牌。
     // 威脅的份量：每家以他已聽牌的機率計（立直者算 1 家，聽牌機率 60% 的副露者算 0.6 家）。
-    let weight: f64 = threats.iter().map(|t| t.p_tenpai).sum();
-    let bonus = STICK_VALUE * f64::from(ctx.view.riichi_sticks) + DENY_VALUE * weight;
+    let threat_weight: f64 = threats.iter().map(|t| t.p_tenpai).sum();
+    // 押引用的和牌機率模型（參數與預測用的分開，見 `utils/predict/win.rs`）。
+    let push = win::Model::push(ctx);
+    let bonus =
+        STICK_VALUE * f64::from(ctx.view.riichi_sticks) + ctx.param(&DENY_VALUE) * threat_weight;
 
     let options: Vec<Option_> = ranked
         .iter()
@@ -109,9 +130,16 @@ fn push_or_fold(
             let waits = if eval.shanten == 0 {
                 f64::from(eval.ukeire)
             } else {
-                win::ASSUMED_WAITS
+                push.assumed_waits
             };
-            let p_win = win::estimate(ctx, eval.shanten, f64::from(eval.ukeire), waits, weight);
+            let p_win = win::estimate(
+                ctx,
+                &push,
+                eval.shanten,
+                f64::from(eval.ukeire),
+                waits,
+                threat_weight,
+            );
             let points = value::my_value(ctx, &hand, eval.shanten, pai);
             // 和不了的手（例如副露沒有役）沒有額外好處。
             let value = if points > 0.0 { points + bonus } else { 0.0 };
@@ -123,6 +151,7 @@ fn push_or_fold(
                 value,
                 deal_in,
                 loss,
+                weight: ctx.param(&WIN_WEIGHT),
             }
         })
         .collect();

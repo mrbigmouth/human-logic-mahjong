@@ -1,7 +1,7 @@
 //! `mj predict-eval`：預測準確度評估（與勝負無關，只看預測對不對）。
 
 use mj_sim::predict_eval::{Dimension, by_dimension, collect, collect_records, summarize};
-use mj_strategy::find_strategy;
+use mj_strategy::find_strategy_spec;
 use mj_strategy::framework::explain::{pad, pad_left};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -9,8 +9,7 @@ use std::time::Instant;
 
 /// `logs` 不是空的時改用牌譜（策略旁觀真人對局），否則自我對戰 `games` 場。
 pub fn run(strategy: &str, logs: &[PathBuf], games: u64, seed: u64) -> Result<(), String> {
-    let st: Arc<dyn mj_strategy::framework::Strategy> =
-        Arc::from(find_strategy(strategy).ok_or_else(|| format!("找不到策略 {strategy}"))?);
+    let st: Arc<dyn mj_strategy::framework::Strategy> = Arc::from(find_strategy_spec(strategy)?);
     let start = Instant::now();
     let judged = if logs.is_empty() {
         let judged = collect(st, games, seed)?;

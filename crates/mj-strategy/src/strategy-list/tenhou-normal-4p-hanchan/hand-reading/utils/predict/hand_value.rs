@@ -12,11 +12,23 @@ use super::super::super::memory::Memory;
 use crate::prelude::*;
 
 /// 立直者和牌的平均點數（閒家）。
-pub const RIICHI_POINTS: f64 = 6300.0;
+pub const RIICHI_POINTS: Param = Param::new(
+    "hand_value.riichi_points",
+    6300.0,
+    3000.0,
+    10000.0,
+    "立直者和牌的平均點數（閒家）",
+);
 /// 立直者和牌是滿貫以上的機率：`[第 0–8 張立直, 第 9–11 張, 第 12 張以後]`。
 pub const RIICHI_MANGAN: [f64; 3] = [0.32, 0.39, 0.48];
 /// 門前沒立直的人和牌的平均點數（閒家；多半之後會立直）。
-pub const CLOSED_POINTS: f64 = 6200.0;
+pub const CLOSED_POINTS: Param = Param::new(
+    "hand_value.closed_points",
+    6200.0,
+    3000.0,
+    10000.0,
+    "門前沒立直的人和牌的平均點數（閒家）",
+);
 /// 門前沒立直的人和牌是滿貫以上的機率：`[看不到的寶牌 3 張以下, 4, 5, 6 張以上]`。
 pub const CLOSED_MANGAN: [f64; 4] = [0.15, 0.24, 0.27, 0.30];
 /// 副露者和牌的平均點數（閒家）：`[副露中的寶牌 0 張, 1, 2, 3, 4 張以上]`。
@@ -50,7 +62,7 @@ pub fn estimate(ctx: &Ctx, _mem: &Memory, seat: Seat) -> (f64, f64) {
             9..=11 => 1,
             _ => 2,
         };
-        (RIICHI_POINTS, RIICHI_MANGAN[group])
+        (ctx.param(&RIICHI_POINTS), RIICHI_MANGAN[group])
     } else if tools::river::open_melds(v, seat) > 0 {
         let dora = usize::from(tools::river::meld_dora(v, seat)).min(4);
         let pons = v.melds[s].iter().filter(|m| !m.is_sequence()).count();
@@ -62,7 +74,10 @@ pub fn estimate(ctx: &Ctx, _mem: &Memory, seat: Seat) -> (f64, f64) {
         (OPEN_POINTS[dora], mangan)
     } else {
         let unseen = usize::from(tools::dora::unseen_dora(v));
-        (CLOSED_POINTS, CLOSED_MANGAN[unseen.clamp(3, 6) - 3])
+        (
+            ctx.param(&CLOSED_POINTS),
+            CLOSED_MANGAN[unseen.clamp(3, 6) - 3],
+        )
     };
     let dealer = if v.dealer() == seat { DEALER } else { 1.0 };
     (points * dealer, mangan)

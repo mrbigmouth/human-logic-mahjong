@@ -4,7 +4,7 @@
 use mj_calc::{is_agari, waits};
 use mj_core::{Pai, TileCounts, parse_pais, parse_tiles};
 use mj_engine::{Action, PlayerView};
-use mj_strategy::find_strategy;
+use mj_strategy::find_strategy_spec;
 use mj_strategy::framework::explain::{action_text, pad, render_record};
 
 /// 分析設定。
@@ -54,7 +54,7 @@ pub fn run(o: &Options) -> Result<(), String> {
         ));
     }
     let dora = parse_tiles(o.dora).map_err(|e| e.to_string())?;
-    let strategy = find_strategy(o.strategy).ok_or_else(|| format!("找不到策略 {}", o.strategy))?;
+    let strategy = find_strategy_spec(o.strategy)?;
 
     let mut sorted = pais.clone();
     sorted.sort();

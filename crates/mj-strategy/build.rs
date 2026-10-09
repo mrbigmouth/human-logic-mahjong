@@ -11,6 +11,8 @@
 //! - `README.md`：策略說明（第一行 `# 標題`，接著一段摘要，之後是詳細特色），GUI 選策略時顯示；
 //! - `main.rs`：`pub fn register(book: &mut Book<Memory>)`；
 //! - `memory.rs`：`pub struct Memory`，需實作 `Default` 與 `Clone`。
+//!
+//! 策略中所有 `pub const 名稱: Param = Param::new(...)` 會自動列為這個策略的可調參數。
 
 use std::fmt::Write;
 use std::fs;
@@ -93,18 +95,22 @@ fn main() {
             writeln!(out, "        pub mod {} {{", ident(&name)).unwrap();
             emit_dir(&mut out, &dir, 3);
             writeln!(out, "        }}").unwrap();
-            strategies.push((rule.clone(), name, dir.join("README.md")));
+            let mut params = Vec::new();
+            find_params(&dir, &mut Vec::new(), &mut params);
+            strategies.push((rule.clone(), name, dir.join("README.md"), params));
         }
         writeln!(out, "    }}").unwrap();
     }
     out.push_str("}\n\n/// 自動產生：所有策略。\npub fn all_strategies() -> Vec<Box<dyn crate::framework::Strategy>> {\n    vec![\n");
-    for (rule, name, readme) in &strategies {
+    for (rule, name, readme, params) in &strategies {
         let m = format!("strategy_list::{}::{}", ident(rule), ident(name));
         let full = format!("{rule}/{name}");
         let readme = readme.display().to_string();
+        let params: Vec<String> = params.iter().map(|p| format!("{m}::{p}")).collect();
         writeln!(
             out,
-            "        crate::framework::book_strategy::<{m}::memory::Memory>({full:?}, include_str!({readme:?}), {m}::main::register),"
+            "        crate::framework::book_strategy::<{m}::memory::Memory>({full:?}, include_str!({readme:?}), {m}::main::register, vec![{}]),",
+            params.join(", ")
         )
         .unwrap();
     }
@@ -116,6 +122,37 @@ fn main() {
     out.push_str("    ]\n}\n");
     let dest = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("strategy_list.rs");
     fs::write(dest, out).unwrap();
+}
+
+/// 找出目錄中所有 `pub const 名稱: Param = Param::new(` 宣告，記下模組路徑（例如 `utils::predict::tenpai::BASE`）。
+fn find_params(dir: &Path, module: &mut Vec<String>, out: &mut Vec<String>) {
+    for p in sorted_entries(dir) {
+        let name = p.file_name().unwrap().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        if p.is_dir() {
+            module.push(ident(&name));
+            find_params(&p, module, out);
+            module.pop();
+        } else if let Some(stem) = name.strip_suffix(".rs") {
+            let text = fs::read_to_string(&p).unwrap();
+            for line in text.lines() {
+                let Some(rest) = line.trim_start().strip_prefix("pub const ") else {
+                    continue;
+                };
+                let Some((ident_part, ty)) = rest.split_once(':') else {
+                    continue;
+                };
+                if ty.trim_start().starts_with("Param =") || ty.trim() == "Param" {
+                    let mut path = module.clone();
+                    path.push(ident(stem));
+                    path.push(ident_part.trim().to_string());
+                    out.push(path.join("::"));
+                }
+            }
+        }
+    }
 }
 
 fn watch(dir: &Path) {

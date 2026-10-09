@@ -4,7 +4,7 @@ use mj_sim::counterfactual::{
     DecisionEval, Dimension, GroupSummary, Metric, Options as CfOptions, by_dimension,
     evaluate_game, summarize,
 };
-use mj_strategy::find_strategy;
+use mj_strategy::find_strategy_spec;
 use mj_strategy::framework::DecisionKind;
 use mj_strategy::framework::explain::{pad, pad_left, render_record};
 use std::path::PathBuf;
@@ -53,8 +53,7 @@ fn header(first: &str) -> String {
 }
 
 pub fn run(o: &Options) -> Result<(), String> {
-    let st: Arc<dyn mj_strategy::framework::Strategy> =
-        Arc::from(find_strategy(o.strategy).ok_or_else(|| format!("找不到策略 {}", o.strategy))?);
+    let st: Arc<dyn mj_strategy::framework::Strategy> = Arc::from(find_strategy_spec(o.strategy)?);
     let opts = CfOptions {
         samples: o.samples,
         rollouts: o.rollouts,

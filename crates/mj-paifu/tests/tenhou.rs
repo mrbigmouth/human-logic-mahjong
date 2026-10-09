@@ -106,3 +106,42 @@ fn decision_points_rebuild_views() {
         }
     }
 }
+
+/// mjai 格式的來回轉換：天鳳牌譜重播後的完整事件 → mjai 牌譜 → 匯入 → 重播，
+/// 結果必須與原牌譜一致（涵蓋吃碰槓、立直、雙響、流局等所有事件的轉換）。
+#[test]
+fn mjai_round_trip() {
+    let mut failures = Vec::new();
+    let mut n = 0;
+    for f in files("xml") {
+        n += 1;
+        let r = load(&f)
+            .and_then(|rec| {
+                let replayed = replay(&rec, [None, None, None, None], false)?;
+                let lines: Vec<String> =
+                    mj_paifu::mjai::events_to_mjai(&replayed.result.log, None, &rec.players)
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect();
+                mj_paifu::mjai::parse(&lines.join("\n"), &rec.id).map(|m| (rec, m))
+            })
+            .and_then(|(rec, m)| {
+                // 匯入後再重播一次，比對的是原本天鳳牌譜記載的點數。
+                let mut m = m;
+                m.final_scores = rec.final_scores;
+                for (a, b) in m.hands.iter_mut().zip(&rec.hands) {
+                    a.end_scores = b.end_scores;
+                }
+                replay(&m, [None, None, None, None], false).map(|_| ())
+            });
+        if let Err(e) = r {
+            failures.push(format!("{}: {e}", f.file_name().unwrap().to_string_lossy()));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{}/{n} 失敗：\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}

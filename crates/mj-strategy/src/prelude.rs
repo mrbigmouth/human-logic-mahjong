@@ -2,7 +2,7 @@
 //!
 //! 工具的完整清單與範例見 `crates/mj-strategy/TOOLS.md`。
 
-pub use crate::framework::{Book, CallChoice, Claim, Ctx, DecisionKind, KanChoice, WinKind};
+pub use crate::framework::{Book, CallChoice, Claim, Ctx, DecisionKind, KanChoice, Param, WinKind};
 pub use mj_engine::Event;
 /// 工具箱：`tools::hand`、`tools::safety`、`tools::value`……
 pub use mj_tools as tools;

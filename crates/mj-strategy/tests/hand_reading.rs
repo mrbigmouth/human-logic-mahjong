@@ -147,3 +147,46 @@ fn plays_full_games_legally() {
         assert_eq!(r.scores.iter().sum::<i32>(), 100_000);
     }
 }
+
+/// 可調參數：建置腳本自動收集、名稱不重複；覆寫會改變判斷；不存在的名稱會報錯；`名稱@覆寫` 可解析。
+#[test]
+fn params_are_collected_and_overridable() {
+    use mj_strategy::framework::ParamSet;
+    use std::sync::Arc;
+    let st = find_strategy(NAME).unwrap();
+    let names: Vec<&str> = st.params().iter().map(|p| p.name).collect();
+    for n in [
+        "tenpai.per_recent_tedashi",
+        "win.later_ukeire",
+        "push.later_ukeire",
+        "call.far_shanten",
+    ] {
+        assert!(names.contains(&n), "缺少參數 {n}：{names:?}");
+    }
+    assert!(
+        st.with_params(ParamSet::parse("no.such=1").unwrap())
+            .is_err()
+    );
+
+    let mut v = view();
+    v.melds[1].push(pon("6z"));
+    river(
+        &mut v,
+        &["1z", "9m", "1p", "8s", "2m", "5p", "3s", "9p", "4z", "7m"],
+    );
+    let mem = Memory::default();
+    let base = tenpai::estimate(&Ctx::new(&v, DecisionKind::Discard), &mem, 1);
+    let more = ParamSet::parse("tenpai.per_recent_tedashi=1.0").unwrap();
+    let ctx = Ctx::new(&v, DecisionKind::Discard).with_params(Arc::new(more));
+    assert!(tenpai::estimate(&ctx, &mem, 1) > base);
+
+    let spec = format!("{NAME}@call.far_shanten=3;riichi.min_waits=1");
+    let tuned = mj_strategy::find_strategy_spec(&spec).unwrap();
+    let far = st
+        .params()
+        .iter()
+        .find(|p| p.name == "call.far_shanten")
+        .unwrap();
+    assert_eq!(tuned.overrides().get(far), 3.0);
+    assert_eq!(st.overrides().get(far), far.default);
+}

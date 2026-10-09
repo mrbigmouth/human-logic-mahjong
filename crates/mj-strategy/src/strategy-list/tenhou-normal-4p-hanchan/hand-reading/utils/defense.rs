@@ -7,7 +7,13 @@ use crate::prelude::*;
 /// 是否也提防沒立直的人（副露者、默聽）。M6 的聽牌預測以天鳳牌譜校準過，可以開啟。
 pub const DEFEND_AGAINST_UNDECLARED: bool = true;
 /// 沒立直的人：聽牌機率達到這個值，就當作威脅（人類會開始提防「這家好像聽了」）。
-pub const UNDECLARED_THREAT_TENPAI: f64 = 0.5;
+pub const UNDECLARED_THREAT_TENPAI: Param = Param::new(
+    "defense.undeclared_threat_tenpai",
+    0.5,
+    0.2,
+    1.0,
+    "沒立直的人聽牌機率達到多少才當作威脅",
+);
 
 /// 一家對我的威脅。
 #[derive(Debug, Clone, Copy)]
@@ -27,7 +33,7 @@ pub fn threats(ctx: &Ctx, mem: &Memory) -> Vec<Threat> {
         .filter_map(|seat| {
             let p_tenpai = tenpai::estimate(ctx, mem, seat);
             let threat = v.riichi[usize::from(seat)]
-                || (DEFEND_AGAINST_UNDECLARED && p_tenpai >= UNDECLARED_THREAT_TENPAI);
+                || (DEFEND_AGAINST_UNDECLARED && p_tenpai >= ctx.param(&UNDECLARED_THREAT_TENPAI));
             threat.then(|| Threat {
                 seat,
                 p_tenpai,

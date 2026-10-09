@@ -4,7 +4,7 @@ use mj_engine::Seat;
 use mj_paifu::GameRecord;
 use mj_review::{GameReview, Options as ReviewOptions, Reviewed, review_game, summarize};
 use mj_sim::counterfactual::{Metric, Options as CfOptions};
-use mj_strategy::find_strategy;
+use mj_strategy::find_strategy_spec;
 use mj_strategy::framework::explain::{pad, pad_left};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -46,9 +46,8 @@ fn seats_of(rec: &GameRecord, opts: &Options) -> Result<Vec<Seat>, String> {
 }
 
 pub fn run(opts: &Options) -> Result<(), String> {
-    let st: Arc<dyn mj_strategy::framework::Strategy> = Arc::from(
-        find_strategy(&opts.strategy).ok_or_else(|| format!("找不到策略 {}", opts.strategy))?,
-    );
+    let st: Arc<dyn mj_strategy::framework::Strategy> =
+        Arc::from(find_strategy_spec(&opts.strategy)?);
     let (records, errors) = mj_paifu::load_all(&opts.logs);
     for e in &errors {
         eprintln!("✗ {e}");

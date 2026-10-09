@@ -6,7 +6,7 @@
 use mj_engine::{Event, GameConfig, HandEnd, Player, run_game};
 use mj_rules::riichi::RiichiConfig;
 use mj_sim::bots::{GreedyBot, RandomBot};
-use mj_strategy::find_strategy;
+use mj_strategy::find_strategy_spec;
 use mj_strategy::framework::Strategy;
 use mj_strategy::framework::explain::{display_width, pad, pad_left};
 use rayon::prelude::*;
@@ -24,6 +24,8 @@ enum SeatSpec {
     Random,
     /// strategy-list 中的策略
     Strategy(Arc<dyn Strategy>),
+    /// 說 mjai 協定的外部程式（程式與參數）
+    Mjai(Vec<String>),
 }
 
 /// 一個座位設定與它在統計中的名稱。
@@ -33,7 +35,9 @@ pub(crate) struct Seat {
     spec: SeatSpec,
 }
 
-/// 解析一個參賽者：`greedy`、`random` 或策略名稱「規則／策略」。
+/// 解析一個參賽者：`greedy`、`random`、`mjai:<外部程式 參數…>`（說 mjai 協定的 AI，每場對局啟動一個行程）
+/// 或策略名稱「規則／策略」（可加 `@參數覆寫`，見 `find_strategy_spec`；
+/// 座位清單以逗號分隔，所以這裡的多個參數改用分號分隔）。
 pub(crate) fn parse_entrant(s: &str) -> Result<Seat, String> {
     match s.trim() {
         "greedy" => Ok(Seat {
@@ -44,12 +48,23 @@ pub(crate) fn parse_entrant(s: &str) -> Result<Seat, String> {
             label: "random".into(),
             spec: SeatSpec::Random,
         }),
-        name => find_strategy(name)
-            .map(|st| Seat {
-                label: name.to_string(),
-                spec: SeatSpec::Strategy(Arc::from(st)),
+        mjai if mjai.starts_with("mjai:") => {
+            let cmd: Vec<String> = mjai["mjai:".len()..]
+                .split_whitespace()
+                .map(String::from)
+                .collect();
+            if cmd.is_empty() {
+                return Err("mjai: 後面要接外部程式，例如 mjai:./mortal.sh".into());
+            }
+            Ok(Seat {
+                label: mjai.to_string(),
+                spec: SeatSpec::Mjai(cmd),
             })
-            .ok_or_else(|| format!("找不到策略 {name}（用 `mj strategies` 查看可用的策略）")),
+        }
+        name => find_strategy_spec(name).map(|st| Seat {
+            label: name.to_string(),
+            spec: SeatSpec::Strategy(Arc::from(st)),
+        }),
     }
 }
 
@@ -72,6 +87,12 @@ pub(crate) fn make_player(seat: &Seat, seed: u64, i: u64) -> Box<dyn Player> {
         SeatSpec::Greedy => Box::new(GreedyBot::new(s, 0.3)),
         SeatSpec::Random => Box::new(RandomBot::new(s)),
         SeatSpec::Strategy(st) => st.player(false, None),
+        SeatSpec::Mjai(cmd) => {
+            let bot =
+                mj_mjai::ProcessBot::spawn(&cmd[0], &cmd[1..]).unwrap_or_else(|e| panic!("{e}"));
+            let names = std::array::from_fn(|_| seat.label.clone());
+            Box::new(mj_mjai::MjaiPlayer::new(bot, names))
+        }
     }
 }
 

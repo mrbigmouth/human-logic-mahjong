@@ -8,6 +8,7 @@
 
 use super::choice::{CallChoice, DecisionKind, KanChoice, WinKind};
 use super::claim::{Claim, ClaimRecord, TargetSituation};
+use super::param::{Param, ParamSet};
 use mj_core::{Pai, Tile, TileCounts};
 use mj_engine::{Action, PlayerView, Seat};
 use mj_tools::RemainingEstimate;
@@ -15,6 +16,7 @@ use mj_tools::after::{AfterEval, evaluate_after};
 use mj_tools::table::Standing;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// 決策情境。
 pub struct Ctx<'a> {
@@ -28,6 +30,7 @@ pub struct Ctx<'a> {
     pub(crate) win: Option<WinKind>,
     pub(crate) riichi_discard: Option<Pai>,
     pub(crate) event_index: usize,
+    params: Arc<ParamSet>,
     remaining: RemainingEstimate,
     after: RefCell<HashMap<Action, AfterEval>>,
     notes: RefCell<Vec<String>>,
@@ -46,11 +49,23 @@ impl<'a> Ctx<'a> {
             win: None,
             riichi_discard: None,
             event_index: 0,
+            params: Arc::default(),
             remaining: mj_tools::visible::remaining(view),
             after: RefCell::default(),
             notes: RefCell::default(),
             claims: RefCell::default(),
         }
+    }
+
+    /// 設定參數覆寫值（框架依策略的設定傳入；測試時也可以用來試不同的值）。
+    pub fn with_params(mut self, p: Arc<ParamSet>) -> Self {
+        self.params = p;
+        self
+    }
+
+    /// 可調參數的值：有覆寫用覆寫值，否則用程式中的預設值（見 `framework::param`）。
+    pub fn param(&self, p: &Param) -> f64 {
+        self.params.get(p)
     }
 
     /// 設定何切的候選牌（測試用）。

@@ -12,7 +12,8 @@
   再看筋、片筋、No Chance、One Chance、寶牌與寶牌旁、他捨牌中這門的比例（染手）、最後手切的牌附近、立直宣言牌的筋、巡目；字牌看已見張數與是否為他的役牌。
 - **讀牌：打點**（`utils/predict/hand_value.rs`）：立直者依立直巡目、副露者依副露中的寶牌與碰的組數、門前者依場上看不到的寶牌數。
 - **押引**：有威脅時（立直者，或聽牌機率 ≥ 50% 的沒立直者），每張候選牌算期望值；威脅的份量以聽牌機率計。
-- **立直或默聽、鳴牌、牌效**：與 `push-fold` 相同（無役立直、默聽滿貫就默聽；有人立直時只有鳴了就聽牌才鳴；進張差不多時保留寶牌）。
+- **立直或默聽、鳴牌、牌效**：架構與 `push-fold` 相同（無役立直、默聽跳滿左右就默聽；有人立直時只有鳴了就聽牌才鳴；進張差不多時保留寶牌）；
+  M8 以 duplicate 調整門檻：非役牌的鳴牌除非鳴了就聽牌，否則要 3 張寶牌；默聽門檻 8000 → 9000 點；牌山剩不到 5 張才改默聽。
 
 ## 校準與強度（M6 完成時）
 
@@ -29,12 +30,17 @@
 
 ## 主要參數
 
+單一數值的門檻與倍數都是可調參數（`Param`），`mj params tenhou-normal-4p-hanchan/hand-reading` 可以列出目前值、範圍與說明，
+任何指令都能用 `策略@名稱=值` 試別的值。查表與一起擬合的倍數維持常數。
+
 | 檔案 | 參數 |
 |---|---|
-| `utils/predict/tenpai.rs` | `BASE`（副露 × 巡目的基準聽牌率）、`PER_RECENT_TEDASHI`、`LAST_TEDASHI_MIDDLE`、`LAST_TEDASHI_HONOR`、`PER_TRAILING_TSUMOGIRI`、`PER_OTHER_RIICHI` |
-| `utils/predict/waits.rs` | `RIICHI_BASE`、`OPEN_BASE`、`RIICHI`／`OPEN`（各線索的勝算倍數）、字牌表 |
-| `utils/predict/hand_value.rs` | `RIICHI_POINTS`、`RIICHI_MANGAN`、`OPEN_POINTS`、`OPEN_MANGAN`、`CLOSED_MANGAN` |
-| `utils/defense.rs` | `DEFEND_AGAINST_UNDECLARED`、`UNDECLARED_THREAT_TENPAI` |
-| `decision/discard.rs` | `DENY_VALUE`、`STICK_VALUE` |
-| `decision/riichi.rs` | `DAMA_POINTS`、`LATE_WALL`、`MIN_WAITS_FOR_RIICHI` |
-| `utils/predict/win.rs` | `ASSUMED_WAITS`、`LATER_UKEIRE`、`RON_CHANCES`、`OTHERS_WIN_PER_TURN` |
+| `utils/predict/tenpai.rs` | `BASE`（副露 × 巡目的基準聽牌率，常數）；`tenpai.*`（各線索的勝算倍數） |
+| `utils/predict/waits.rs` | `RIICHI_BASE`、`OPEN_BASE`、`RIICHI`／`OPEN`（各線索的勝算倍數）、字牌表（常數）；`waits.suji_trap` |
+| `utils/predict/hand_value.rs` | `RIICHI_MANGAN`、`OPEN_POINTS`、`OPEN_MANGAN`、`CLOSED_MANGAN`（常數）；`hand_value.*` |
+| `utils/predict/win.rs` | `win.*`（預測用，以牌譜校準）、`push.*`（押引用，以對戰調整），見 `Model` |
+| `utils/defense.rs` | `DEFEND_AGAINST_UNDECLARED`；`defense.undeclared_threat_tenpai` |
+| `decision/discard.rs` | `discard.deny_value`、`discard.win_weight`；`STICK_VALUE` |
+| `decision/riichi.rs` | `riichi.dama_points`、`riichi.late_wall`、`riichi.min_waits` |
+| `decision/call.rs` | `call.far_shanten`、`call.min_dora_for_far_call` |
+| `utils/efficiency.rs` | `efficiency.dora_discount` |

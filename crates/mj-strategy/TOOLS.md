@@ -260,3 +260,35 @@ mj review data/tenhou --strategy tenhou-normal-4p-hanchan/hand-reading --json re
 
 範例（`tenhou-normal-4p-hanchan/push-fold`）：`tsumogiri_streak` 從中巡（`WATCH_FROM_TURN = 6`）起記錄各家連續摸切次數，
 手切或鳴牌歸 0；`predict::tenpai` 依此提高副露者的聽牌機率。
+
+## 8. 可調參數與自動調整
+
+策略中的門檻與倍數寫成 `Param` 常數：預設值寫在程式裡（讀程式就知道策略怎麼想），執行時可以覆寫，
+自動調整工具靠覆寫來搜尋更好的值。
+
+```rust
+/// 最近 3 張中，每多 1 張手切，聽牌的勝算乘上這個值。
+pub const PER_RECENT_TEDASHI: Param =
+    Param::new("tenpai.per_recent_tedashi", 0.73, 0.4, 1.0, "最近 3 張每多 1 張手切的聽牌勝算倍數");
+//                    名稱（唯一）            預設   範圍下限、上限  一句話說明
+
+let factor = ctx.param(&PER_RECENT_TEDASHI).powi(n); // 讀取（有覆寫用覆寫值，否則用預設值）
+```
+
+- 建置時會自動找出策略中所有 `pub const 名稱: Param = Param::new(...)`，不需要另外登記。
+- 整數意義的參數（幾向聽、幾張）也用 `f64` 宣告，比較時寫 `f64::from(x) >= ctx.param(&P)`。
+- 查表（例如 `BASE` 這種依副露與巡目的表）、一起擬合的一組倍數，維持一般的常數。
+
+```sh
+mj params tenhou-normal-4p-hanchan/hand-reading                       # 列出參數：目前值、預設、範圍、說明
+mj selfplay --seats "S@call.far_shanten=3;riichi.min_waits=3,S,greedy,greedy"   # 任何指令的策略名稱都可以加 @覆寫
+mj simulate S@tuned.txt S --blocks 2000                                # 參數檔：每行一個「名稱 = 值」
+
+# 預測的參數：在牌譜上以對數損失擬合，另一組牌譜驗證
+mj tune S --objective logloss --source predict::tenpai --params tenpai. --logs <擬合用牌譜> --validate-logs <驗證用牌譜>
+# 決策的參數：候選值與目前值直接 duplicate 對戰，好過 2 個標準誤才採用；最後在新的牌山 seed 上驗證
+mj tune S --objective duplicate --params call. riichi.min_waits --blocks 2000 --out tuned.txt
+```
+
+調整找到更好的值之後，把程式裡的預設值改掉（參數檔只是暫時的覆寫），並在驗證時換一組牌山 seed，
+避免對同一組牌山過度調整。預測變準不一定讓決策變好（M5、M8 都觀察到），預測參數調整後也要用 duplicate 確認決策沒有變差。

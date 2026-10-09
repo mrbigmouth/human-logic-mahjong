@@ -7,6 +7,7 @@ mod predict_eval;
 mod review;
 mod selfplay;
 mod simulate;
+mod tune;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -84,6 +85,65 @@ enum Command {
         /// 起始 seed
         #[arg(long, default_value_t = 0)]
         seed: u64,
+    },
+    /// 列出策略的可調參數（名稱、目前值、預設值、範圍、說明）。策略名稱可加 `@覆寫`，
+    /// 例如 `策略@params.txt` 或 `策略@call.far_shanten=3`（所有指令的策略名稱都可以這樣寫）
+    Params {
+        /// 策略名稱
+        #[arg(default_value = "tenhou-normal-4p-hanchan/hand-reading")]
+        strategy: String,
+    },
+    /// 自動調整可調參數：預測以牌譜上的對數損失擬合，決策以 duplicate 對戰調整；最後用另一組資料驗證
+    Tune {
+        /// 策略名稱（可加 @覆寫，作為調整的起點）
+        #[arg(default_value = "tenhou-normal-4p-hanchan/hand-reading")]
+        strategy: String,
+        /// 要調整的參數（名稱，或以 . 結尾的前綴，例如 tenpai.）
+        #[arg(long, num_args = 1.., required = true)]
+        params: Vec<String>,
+        /// 目標：logloss（預測，需要 --logs）或 duplicate（決策）
+        #[arg(long, default_value = "duplicate")]
+        objective: String,
+        /// logloss：要擬合的預測函式
+        #[arg(long, default_value = "predict::tenpai")]
+        source: String,
+        /// logloss：擬合用的牌譜
+        #[arg(long, num_args = 1..)]
+        logs: Vec<PathBuf>,
+        /// logloss：驗證用的牌譜（應與擬合用的不同）
+        #[arg(long, num_args = 1..)]
+        validate_logs: Vec<PathBuf>,
+        /// duplicate：對戰的基準（預設 = 調整前的同一策略）
+        #[arg(long)]
+        baseline: Option<String>,
+        /// duplicate：每次比較的組數
+        #[arg(long, default_value_t = 1000)]
+        blocks: u64,
+        /// duplicate：調整用的牌山 seed
+        #[arg(long, default_value_t = 700_000)]
+        seed: u64,
+        /// duplicate：驗證的組數
+        #[arg(long, default_value_t = 4000)]
+        validate_blocks: u64,
+        /// duplicate：驗證用的牌山 seed（應與調整用的不同）
+        #[arg(long, default_value_t = 800_000)]
+        validate_seed: u64,
+        /// 座標搜尋輪數
+        #[arg(long, default_value_t = 2)]
+        rounds: usize,
+        /// duplicate：候選值要好過幾個標準誤才採用
+        #[arg(long, default_value_t = 2.0)]
+        accept_z: f64,
+        /// 把調整後的參數寫成參數檔
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// 以 mjai 協定在標準輸入／輸出上執行內建的簡單機器人（驗證 mjai 介接用）：
+    /// 每讀一行事件陣列，回應一行動作
+    MjaiBot {
+        /// 機器人種類：shanten（向聽數最低）或 tsumogiri（永遠摸切）
+        #[arg(long, default_value = "shanten")]
+        kind: String,
     },
     /// 牌譜復盤：逐手比較玩家與策略的選擇，附策略的理由；選擇不同的地方用反事實模擬算出各選項的期望值，
     /// 最後彙整失誤類型
@@ -246,6 +306,73 @@ fn main() -> ExitCode {
             seed,
         } => {
             return exit(predict_eval::run(&strategy, &logs, games, seed));
+        }
+        Command::Tune {
+            strategy,
+            params,
+            objective,
+            source,
+            logs,
+            validate_logs,
+            baseline,
+            blocks,
+            seed,
+            validate_blocks,
+            validate_seed,
+            rounds,
+            accept_z,
+            out,
+        } => {
+            return exit(tune::run(&tune::Options {
+                strategy,
+                params,
+                objective,
+                source,
+                logs,
+                validate_logs,
+                baseline,
+                blocks,
+                seed,
+                validate_blocks,
+                validate_seed,
+                rounds,
+                accept_z,
+                out,
+            }));
+        }
+        Command::MjaiBot { kind } => {
+            let kind = match kind.as_str() {
+                "shanten" => mj_mjai::bots::Kind::Shanten,
+                "tsumogiri" => mj_mjai::bots::Kind::Tsumogiri,
+                other => {
+                    eprintln!("未知的機器人 {other}（可用 shanten 或 tsumogiri）");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let mut bot = mj_mjai::bots::MjaiBot::new(kind);
+            let stdin = std::io::stdin();
+            return exit(mj_mjai::serve(&mut bot, stdin.lock(), std::io::stdout()));
+        }
+        Command::Params { strategy } => {
+            let st = match mj_strategy::find_strategy_spec(&strategy) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("{e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            if st.params().is_empty() {
+                println!("{} 沒有可調參數", st.name());
+            }
+            for p in st.params() {
+                let v = st.overrides().get(p);
+                let mark = if v != p.default { "（覆寫）" } else { "" };
+                println!(
+                    "{} = {v}{mark}\n    預設 {}，範圍 {}–{}：{}",
+                    p.name, p.default, p.min, p.max, p.doc
+                );
+            }
+            return ExitCode::SUCCESS;
         }
         Command::Review {
             logs,
