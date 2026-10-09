@@ -256,6 +256,7 @@ version = "0.1.0"
 dependencies = [
  "mj-core",
  "mj-engine",
+ "mj-mjai",
  "mj-paifu",
  "mj-rules",
  "mj-sim",

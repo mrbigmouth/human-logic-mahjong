@@ -11,9 +11,14 @@
 //!    依玩家當時看得到的資訊重抽看不到的牌，各選項強制選定後由策略接著打完，比較平均結果
 //!    （`mj_sim::counterfactual::evaluate_snapshot`）。
 //! 4. 玩家的選擇比最佳選項差、而且差距顯著（大於 2 倍標準誤）時算「失誤」，依類型統計。
+//!
+//! 可以另外掛一個說 mjai 的強 AI（例如 Mortal，`Options::mjai`）一起旁觀（M8）：
+//! 每個決策多記一個「AI 的選擇」，彙整時算玩家、策略與 AI 三方的一致率。
+//! 只比一致率時可以關掉反事實評估（`Options::evaluate`），快很多。
 
 use mj_core::Pai;
-use mj_engine::{Action, PlayerView, Seat, hand_seed};
+use mj_engine::{Action, Event, Player, PlayerView, Seat, hand_seed};
+use mj_mjai::{MjaiPlayer, PooledBot, ShadowChoice};
 use mj_paifu::GameRecord;
 use mj_paifu::replay::{DecisionPoint, capture, replay};
 use mj_sim::counterfactual::{self, Point, Settle, evaluate_snapshot, paired_diff};
@@ -33,6 +38,10 @@ pub struct Options {
     pub all: bool,
     /// 反事實評估的設定（世界數、衡量方式、是否重抽看不到的牌）
     pub eval: counterfactual::Options,
+    /// 是否做反事實評估（false = 只比較選擇，例如只算一致率）
+    pub evaluate: bool,
+    /// 一起旁觀的 mjai AI（程式與參數）；每個復盤的座位一個行程
+    pub mjai: Option<Vec<String>>,
 }
 
 /// 反事實評估的結果。
@@ -85,6 +94,8 @@ pub struct Reviewed {
     pub round: String,
     /// 自己打過幾張（巡目）
     pub turn: u8,
+    /// 已立直的對手人數
+    pub riichi_opponents: u8,
     /// 決策種類
     pub kind: DecisionKind,
     /// 選項
@@ -93,6 +104,8 @@ pub struct Reviewed {
     pub strategy: usize,
     /// 玩家的選擇
     pub player: usize,
+    /// mjai AI 的選擇（有掛 AI、而且它的動作能對應到這個決策的選項時）
+    pub ai: Option<usize>,
     /// 策略的理由
     pub notes: Vec<String>,
     /// 玩家與策略選擇不同時的差異類型（例如「向聽倒退」「漏鳴」）
@@ -105,6 +118,11 @@ impl Reviewed {
     /// 玩家與策略的選擇相同。
     pub fn agrees(&self) -> bool {
         self.strategy == self.player
+    }
+
+    /// 有立直的對手時算「有人立直」的情境（一致率的分組用）。
+    pub fn facing_riichi(&self) -> bool {
+        self.riichi_opponents > 0
     }
 }
 
@@ -125,6 +143,31 @@ pub struct GameReview {
     pub incomparable: usize,
     /// 需要評估、但快照點不支援（例如搶槓）而略過的決策數
     pub skipped: usize,
+    /// mjai AI 的回應無法對應到合法動作的次數（與第一個原因）
+    pub ai_errors: usize,
+    pub ai_first_error: Option<String>,
+}
+
+/// 同時旁觀的兩個玩家：策略（動作被回傳，但重播時不採用）與 mjai AI。
+struct Both<'a> {
+    a: &'a mut dyn Player,
+    b: Option<&'a mut MjaiPlayer<PooledBot>>,
+}
+
+impl Player for Both<'_> {
+    fn on_event(&mut self, me: Seat, event: &Event) {
+        self.a.on_event(me, event);
+        if let Some(b) = self.b.as_mut() {
+            b.on_event(me, event);
+        }
+    }
+
+    fn act(&mut self, view: &PlayerView, legal: &[Action]) -> Action {
+        if let Some(b) = self.b.as_mut() {
+            b.act(view, legal);
+        }
+        self.a.act(view, legal)
+    }
 }
 
 /// 局名，例如「東1局 0本場」。
@@ -144,19 +187,41 @@ pub fn review_game(
     } else {
         opts.seats.clone()
     };
-    // 1. 重播：四家旁觀者記錄決策，牌譜記錄每次詢問的實際動作。
+    // 1. 重播：四家旁觀者記錄決策，牌譜記錄每次詢問的實際動作；有 mjai AI 時，復盤的座位也讓它旁觀。
     let mut shadows: Vec<Box<dyn StrategyPlayer>> = (0..4u8)
         .map(|s| strategy.player(seats.contains(&s), None))
         .collect();
+    let mut ais: Vec<Option<MjaiPlayer<PooledBot>>> = (0..4u8)
+        .map(|s| match &opts.mjai {
+            Some(cmd) if seats.contains(&s) => PooledBot::checkout(cmd)
+                .map(|b| Some(MjaiPlayer::new(b, rec.players.clone()).shadow())),
+            _ => Ok(None),
+        })
+        .collect::<Result<_, _>>()?;
     let replayed = {
-        let refs: [Option<&mut dyn mj_engine::Player>; 4] = {
-            let mut it = shadows
-                .iter_mut()
-                .map(|p| Some(p.as_mut() as &mut dyn mj_engine::Player));
+        let mut both: Vec<Both> = shadows
+            .iter_mut()
+            .zip(ais.iter_mut())
+            .map(|(a, b)| Both {
+                a: a.as_mut() as &mut dyn Player,
+                b: b.as_mut(),
+            })
+            .collect();
+        let refs: [Option<&mut dyn Player>; 4] = {
+            let mut it = both.iter_mut().map(|p| Some(p as &mut dyn Player));
             std::array::from_fn(|_| it.next().unwrap())
         };
         replay(rec, refs, true)?
     };
+    let ai_choices: Vec<Vec<ShadowChoice>> = ais
+        .iter_mut()
+        .map(|a| a.as_mut().map(|a| a.take_choices()).unwrap_or_default())
+        .collect();
+    let ai_failures: Vec<&ShadowChoice> = ai_choices
+        .iter()
+        .flatten()
+        .filter(|c| c.error.is_some())
+        .collect();
 
     // 2. 把玩家的動作對應到策略的決策選項。
     let mut decisions = Vec::new();
@@ -178,7 +243,13 @@ pub fn review_game(
                 .then(|| strategy_discard(&records, i, point))
                 .flatten();
             match option_of_action(r.kind, &point.legal, &point.chosen, riichi_pai) {
-                Some(player) => decisions.push(reviewed(seat, r, point, player)),
+                Some(player) => {
+                    let ai = ai_choices[usize::from(seat)]
+                        .get(r.act_index as usize)
+                        .and_then(|c| c.action.as_ref())
+                        .and_then(|a| option_of_action(r.kind, &point.legal, a, riichi_pai));
+                    decisions.push(reviewed(seat, r, point, player, ai));
+                }
                 None => incomparable += 1,
             }
         }
@@ -188,7 +259,7 @@ pub fn review_game(
     // 3. 反事實評估：選擇不同（或全部）的決策。
     let rules = replayed.cfg.rules.clone();
     let targets: Vec<usize> = (0..decisions.len())
-        .filter(|&i| opts.all || !decisions[i].agrees())
+        .filter(|&i| opts.evaluate && (opts.all || !decisions[i].agrees()))
         .collect();
     let evals: Vec<(usize, Option<Evaluation>)> = targets
         .par_iter()
@@ -212,6 +283,8 @@ pub fn review_game(
         decisions,
         incomparable,
         skipped,
+        ai_errors: ai_failures.len(),
+        ai_first_error: ai_failures.first().and_then(|c| c.error.clone()),
     })
 }
 
@@ -236,7 +309,13 @@ pub fn parse_discard_label(label: &str) -> Option<Pai> {
     label.strip_prefix("打 ")?.parse().ok()
 }
 
-fn reviewed(seat: Seat, r: &DecisionRecord, point: &DecisionPoint, player: usize) -> Reviewed {
+fn reviewed(
+    seat: Seat,
+    r: &DecisionRecord,
+    point: &DecisionPoint,
+    player: usize,
+    ai: Option<usize>,
+) -> Reviewed {
     let difference =
         (player != r.chosen).then(|| classify(r.kind, &r.options, r.chosen, player, &point.view));
     Reviewed {
@@ -245,10 +324,12 @@ fn reviewed(seat: Seat, r: &DecisionRecord, point: &DecisionPoint, player: usize
         act_index: r.act_index,
         round: round_name(&point.view),
         turn: r.situation.turn,
+        riichi_opponents: r.situation.riichi_opponents,
         kind: r.kind,
         options: r.options.clone(),
         strategy: r.chosen,
         player,
+        ai,
         notes: r.notes.clone(),
         difference,
         eval: None,
@@ -501,4 +582,73 @@ pub fn summarize(reviews: &[GameReview]) -> Summary {
         by_kind,
         by_type,
     }
+}
+
+/// 一組決策的三方一致率（玩家、策略、mjai AI）。只計入 AI 的選擇能對應到選項的決策。
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Agreement {
+    /// 組名（決策種類 × 情境）
+    pub label: String,
+    /// 決策數
+    pub decisions: usize,
+    /// 玩家與 AI 選擇相同的比例
+    pub player_ai: f64,
+    /// 策略與 AI 選擇相同的比例
+    pub strategy_ai: f64,
+    /// 策略與玩家選擇相同的比例
+    pub strategy_player: f64,
+    /// 是非型的決策（九種九牌、和牌、開槓、立直、鳴牌：選項 0 =「不做」）中，策略做、AI 不做的比例
+    pub strategy_acts: f64,
+    /// 同上，AI 做、策略不做的比例
+    pub ai_acts: f64,
+}
+
+impl Agreement {
+    /// 由一組決策計算。
+    pub fn of(label: String, ds: &[&Reviewed]) -> Self {
+        let ds: Vec<&&Reviewed> = ds.iter().filter(|d| d.ai.is_some()).collect();
+        let rate = |same: &dyn Fn(&Reviewed) -> bool| {
+            ds.iter().filter(|d| same(d)).count() as f64 / ds.len().max(1) as f64
+        };
+        let yes_no = |d: &Reviewed| d.kind != DecisionKind::Discard;
+        Agreement {
+            label,
+            decisions: ds.len(),
+            player_ai: rate(&|d| d.ai == Some(d.player)),
+            strategy_ai: rate(&|d| d.ai == Some(d.strategy)),
+            strategy_player: rate(&|d| d.agrees()),
+            strategy_acts: rate(&|d| yes_no(d) && d.strategy != 0 && d.ai == Some(0)),
+            ai_acts: rate(&|d| yes_no(d) && d.strategy == 0 && d.ai.is_some_and(|a| a != 0)),
+        }
+    }
+}
+
+/// 三方一致率：全部、依決策種類，以及依決策種類 ×「有沒有對手立直」。
+///
+/// 一致率衡量「像不像」而不是「好不好」：AI 也會犯錯，而且很多局面有幾個差不多好的選擇
+/// （例如牌效完全相同的兩張牌）。所以它適合找出系統性的差異（某類局面一致率特別低），
+/// 再用反事實評估或對戰確認誰比較好。
+pub fn agreement(reviews: &[GameReview]) -> Vec<Agreement> {
+    let all: Vec<&Reviewed> = reviews.iter().flat_map(|r| r.decisions.iter()).collect();
+    let mut out = vec![Agreement::of("全部".into(), &all)];
+    for k in DecisionKind::ALL {
+        let of_kind: Vec<&Reviewed> = all.iter().copied().filter(|d| d.kind == k).collect();
+        let a = Agreement::of(k.name().to_string(), &of_kind);
+        if a.decisions == 0 {
+            continue;
+        }
+        out.push(a);
+        for (label, riichi) in [("無人立直", false), ("有人立直", true)] {
+            let v: Vec<&Reviewed> = of_kind
+                .iter()
+                .copied()
+                .filter(|d| d.facing_riichi() == riichi)
+                .collect();
+            let a = Agreement::of(format!("{}：{label}", k.name()), &v);
+            if a.decisions > 0 {
+                out.push(a);
+            }
+        }
+    }
+    out
 }

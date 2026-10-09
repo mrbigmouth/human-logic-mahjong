@@ -1,8 +1,11 @@
 //! `mj review`：牌譜復盤。逐手比較玩家與策略的選擇，附策略的理由與反事實期望值，最後彙整失誤類型。
+//! 加上 `--mjai` 時，另一個說 mjai 的 AI（例如 Mortal）也一起旁觀，列出它的選擇與三方一致率。
 
 use mj_engine::Seat;
 use mj_paifu::GameRecord;
-use mj_review::{GameReview, Options as ReviewOptions, Reviewed, review_game, summarize};
+use mj_review::{
+    Agreement, GameReview, Options as ReviewOptions, Reviewed, agreement, review_game, summarize,
+};
 use mj_sim::counterfactual::{Metric, Options as CfOptions};
 use mj_strategy::find_strategy_spec;
 use mj_strategy::framework::explain::{pad, pad_left};
@@ -22,6 +25,8 @@ pub struct Options {
     pub metric: Metric,
     pub omniscient: bool,
     pub json: Option<PathBuf>,
+    /// 一起旁觀的 mjai AI（程式與參數）
+    pub mjai: Option<Vec<String>>,
 }
 
 /// 要復盤的座位：指定座位，或依玩家名稱找；都沒指定時四家都復盤。
@@ -81,6 +86,8 @@ pub fn run(opts: &Options) -> Result<(), String> {
                 determinize: !opts.omniscient,
                 kinds: Vec::new(),
             },
+            evaluate: true,
+            mjai: opts.mjai.clone(),
         };
         match review_game(&st, rec, &ro) {
             Ok(r) => {
@@ -91,6 +98,10 @@ pub fn run(opts: &Options) -> Result<(), String> {
         }
     }
     print_summary(&reviews, unit);
+    if opts.mjai.is_some() {
+        println!();
+        print_agreement(&agreement(&reviews), "你");
+    }
     println!(
         "\n策略 {}；衡量方式：{}；對手手牌：{}；{:.1} 秒",
         opts.strategy,
@@ -118,6 +129,7 @@ fn shown(d: &Reviewed, show: &str) -> bool {
     match show {
         "all" => true,
         "mistakes" => d.eval.as_ref().is_some_and(|e| e.is_mistake()),
+        "ai" => d.ai.is_some_and(|a| a != d.player),
         _ => !d.agrees(),
     }
 }
@@ -136,6 +148,13 @@ fn print_game(r: &GameReview, opts: &Options, unit: &str) {
             g.mean_diff,
             g.mean_diff_se,
             g.mistakes
+        );
+    }
+    if r.ai_errors > 0 {
+        println!(
+            "（AI 的回應有 {} 次無法對應到合法動作，例如：{}）",
+            r.ai_errors,
+            r.ai_first_error.as_deref().unwrap_or_default()
         );
     }
     if r.incomparable > 0 || r.skipped > 0 {
@@ -171,6 +190,15 @@ fn print_decision(d: &Reviewed, r: &GameReview, unit: &str) {
             "  你：{}　策略：{}{tag}",
             d.options[d.player], d.options[d.strategy]
         );
+    }
+    if let Some(a) = d.ai {
+        let same = match (a == d.player, a == d.strategy) {
+            (true, true) => "（與你和策略相同）",
+            (true, false) => "（與你相同）",
+            (false, true) => "（與策略相同）",
+            (false, false) => "",
+        };
+        println!("  AI：{}{same}", d.options[a]);
     }
     if let Some(e) = &d.eval {
         let verdict = if d.agrees() {
@@ -297,5 +325,62 @@ fn print_summary(reviews: &[GameReview], unit: &str) {
          （一場有幾十個決策要評估，單一決策用較嚴的門檻以免誤報；整體傾向請看平均差值）。",
         mj_review::MIN_GROUP,
         mj_review::MISTAKE_Z
+    );
+}
+
+/// 三方一致率表。`player` = 玩家欄的稱呼（復盤是「你」，自我對戰時沒有玩家欄）。
+pub(crate) fn print_agreement(rows: &[Agreement], player: &str) {
+    println!("════ 與 AI 的一致率 ════");
+    let with_player = !player.is_empty();
+    print!(
+        "{}{}{}",
+        pad("決策種類", 30),
+        pad_left("決策數", 8),
+        pad_left("策略＝AI", 10)
+    );
+    if with_player {
+        print!(
+            "{}{}",
+            pad_left(&format!("{player}＝AI"), 10),
+            pad_left(&format!("策略＝{player}"), 12)
+        );
+    }
+    println!(
+        "{}{}",
+        pad_left("策略做AI不做", 14),
+        pad_left("AI做策略不做", 14)
+    );
+    for a in rows {
+        print!(
+            "{}{}{}",
+            pad(&a.label, 30),
+            pad_left(&a.decisions.to_string(), 8),
+            pad_left(&format!("{:.1}%", a.strategy_ai * 100.0), 10)
+        );
+        if with_player {
+            print!(
+                "{}{}",
+                pad_left(&format!("{:.1}%", a.player_ai * 100.0), 10),
+                pad_left(&format!("{:.1}%", a.strategy_player * 100.0), 12)
+            );
+        }
+        let acts = |x: f64| {
+            if a.label.starts_with("何切") || a.label == "全部" {
+                "—".to_string()
+            } else {
+                format!("{:.1}%", x * 100.0)
+            }
+        };
+        println!(
+            "{}{}",
+            pad_left(&acts(a.strategy_acts), 14),
+            pad_left(&acts(a.ai_acts), 14)
+        );
+    }
+    println!(
+        "（只計入有兩個以上選項、而且 AI 的選擇能對應到選項的決策。一致率是「像不像」而不是「好不好」：\n\
+         很多局面有幾個差不多好的選擇；一致率特別低的類別再用反事實評估或對戰確認誰比較好。\n\
+         「做」= 是非型決策中選了選項 0（不鳴、不槓、默聽、不和、不流局）以外的選項。\n\
+         同一局中同樣的局面每巡都算一次決策，例如玩家連續幾巡默聽時，策略每巡都會想立直。）"
     );
 }

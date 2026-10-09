@@ -14,5 +14,6 @@ mj-strategy.workspace = true
 mj-tools.workspace = true
 mj-paifu.workspace = true
 mj-sim.workspace = true
+mj-mjai.workspace = true
 rayon.workspace = true
 serde.workspace = true

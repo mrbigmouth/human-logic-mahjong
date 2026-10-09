@@ -31,12 +31,15 @@ fn reviews_one_seat() {
             determinize: true,
             kinds: Vec::new(),
         },
+        evaluate: true,
+        mjai: None,
     };
     let r = review_game(&st, &rec, &opts).unwrap();
     assert!(r.decisions.len() > 50, "{}", r.decisions.len());
     let mut differences = 0;
     for d in &r.decisions {
         assert_eq!(d.seat, 1);
+        assert!(d.ai.is_none());
         assert!(d.player < d.options.len() && d.strategy < d.options.len());
         assert_eq!(d.difference.is_some(), !d.agrees());
         if !d.agrees() {

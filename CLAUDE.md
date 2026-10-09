@@ -31,7 +31,7 @@ M2.5 重構後的開發循環是「寫判斷 → 評估（預測看準確度、�
 | M5 | 策略 | 押引（和牌機率 × 價值 − 放銃機率 × 對手打點）、`predict::win`、立直或默聽、鳴牌時機、保留寶牌 | ✅ |
 | M6 | 策略 | 讀牌：聽牌、聽牌張、打點預測（手切摸切、牌河順序、副露），以天鳳牌譜校準（`hand-reading`） | ✅ |
 | M7 | 產品 | 復盤（CLI／JSON）：使用者牌譜逐手比對，附策略理由與反事實期望值、失誤統計（`mj review`） | ✅ |
-| **M8** | 評估 | 具名可調參數與自動調整（`mj tune`）；mjai 介接（`mj-mjai`）；與強 AI（Mortal）比對 | **進行中**（1、2 ✅；3 待決定權重來源） |
+| M8 | 評估 | 具名可調參數與自動調整（`mj tune`）；mjai 介接（`mj-mjai`）；與強 AI（Mortal）對戰與一致率（`mj agree`） | ✅ |
 | M9 | 產品 | Tauri 桌面練習 App（人機對戰、即時提示、對局後復盤）；`mj serve` | |
 | M10 | 策略 | 印象操作（詐騙與反詐騙） | |
 
@@ -65,6 +65,9 @@ mj review <牌譜> --player <名稱>                                     # 復�
 mj params <策略>                                                    # 可調參數（任何指令的策略名稱都可加 @參數檔 或 @名稱=值;名稱=值）
 mj tune <策略> --objective logloss|duplicate --params <名稱或前綴.>   # 自動調整（預測：牌譜對數損失；決策：duplicate）
 mj selfplay --seats "mjai:<外部程式 參數>,greedy,..."                # 說 mjai 協定的外部 AI 上桌（mj mjai-bot 是內建的測試機器人）
+mj simulate tenhou-normal-4p-hanchan/hand-reading "mjai:tools/mortal/run.sh s42" --blocks 150   # 與 Mortal 對戰（安裝：tools/mortal/setup.sh）
+mj agree data/tenhou --mjai "tools/mortal/run.sh s42"               # 一致率：策略、玩家、Mortal 的選擇（--selfplay N 改用自我對戰的局面）
+mj review <牌譜> --player <名稱> --mjai "tools/mortal/run.sh s42"     # 復盤附 Mortal 的選擇（--show ai 只列與 Mortal 不同的決策）
 ```
 
 - 天鳳牌譜用 `tools/fetch-tenhou.sh <YYYYMMDDHH ...> -n <每小時場數>` 下載到 `data/tenhou/`（已 gitignore；天鳳只保留最近幾天的每小時清單）。
@@ -76,7 +79,7 @@ mj selfplay --seats "mjai:<外部程式 參數>,greedy,..."                # 說
 ## 架構
 
 Crate 相依鏈：`mj-core → mj-calc → mj-rules → mj-engine → mj-tools → mj-strategy → mj-sim → mj-cli`，
-另有 `mj-engine → mj-paifu → mj-sim`、`mj-sim, mj-paifu → mj-review／mj-tuner → mj-cli`、`mj-paifu → mj-mjai → mj-cli`。
+另有 `mj-engine → mj-paifu → mj-sim`、`mj-sim, mj-paifu → mj-review／mj-tuner → mj-cli`、`mj-paifu → mj-mjai → mj-review, mj-cli`。
 
 - **mj-core**：`Tile`（34 種，編號 0–33）、`Pai`（牌＋赤五旗標）、`TileCounts`（34 格牌數表，計算都用它）、`Meld`。
 - **mj-calc**：精確向聽（各花色 DP，thread-local 快取）、進張、聽牌張、和牌拆解。與規則無關。
@@ -95,9 +98,10 @@ Crate 相依鏈：`mj-core → mj-calc → mj-rules → mj-engine → mj-tools �
   - `framework/player.rs`（`BookPlayer`）把引擎的單次詢問拆成依人類順序的決策：自己回合「九種九牌 → 和牌 → 開槓 → 何切 → 立直」，他家打牌「和牌 → 鳴牌」。決策結果必須是框架列出的選項之一，否則改用預設並標記 `invalid`。每個決策可記錄成 `DecisionRecord`（選項、選擇、`ctx.note` 理由、`ctx.claim` 預測），也可用 `Force` 強制指定選項。
 - **mj-engine 的快照**（`snapshot.rs`）：`capture_snapshot` 重播到「即將第 n 次詢問某座位」時保存局面；`Snapshot::determinize` 依決策者視角重抽看不到的牌；`resume_game` 從快照繼續。快照點依賴 `Table.asks`（每座位被詢問次數 = 玩家的 `act_index`）。
 - **mj-paifu**：牌譜匯入。`tenhou_xml`／`tenhou_json` 解析成 `GameRecord`（配牌、依時間排序的 `Step`、原牌譜點數）；`replay` 由配牌與摸牌順序還原牌山（`build_wall`）、四家用共用進度的 `ScriptedPlayer` 照牌譜出牌讓引擎重打，再比對每局開始／結束與終局點數。可記錄每次詢問的 `DecisionPoint`（視角、合法動作、牌譜的選擇），也可掛策略當「旁觀者」（收到事件與詢問、做預測，動作照牌譜）。新格式只要輸出 `GameRecord` 即可。
-- **mj-review**（M7）：牌譜復盤。重播時四家掛策略旁觀、記下策略的決策，用 `framework::option_of_action` 把玩家的實際動作對應到決策選項（走了另一條路的決策無法比較）；選擇不同的決策用 `mj_paifu::replay::capture` 在牌譜局面保存快照，再用 `counterfactual::evaluate_snapshot` 重打比較。「失誤」只比較玩家與策略兩個選項的成對差值（不和「最高期望值」比，最高者有挑選偏差）；差異依類型分類並彙整。
+- **mj-review**（M7）：牌譜復盤。可另外掛 mjai AI（`Options::mjai`）一起旁觀，算三方一致率（`agreement`）；`evaluate: false` 只比選擇不做反事實評估。重播時四家掛策略旁觀、記下策略的決策，用 `framework::option_of_action` 把玩家的實際動作對應到決策選項（走了另一條路的決策無法比較）；選擇不同的決策用 `mj_paifu::replay::capture` 在牌譜局面保存快照，再用 `counterfactual::evaluate_snapshot` 重打比較。「失誤」只比較玩家與策略兩個選項的成對差值（不和「最高期望值」比，最高者有挑選偏差）；差異依類型分類並彙整。
 - **mj-tuner**（M8）：座標搜尋調整 `Param`：預測以牌譜上的對數損失（黃金分割）、決策以 duplicate（候選值與目前值直接對戰，好過 2 個標準誤才採用）。
-- **mj-mjai**（M8）：`MjaiPlayer` 讓說 mjai 協定的 AI 上桌（`Bot` trait；`ProcessBot` = 子行程，一行事件陣列／一行回應，與 mjai.app 相同；立直兩段式；搶槓前補送槓事件）；`bots` 內建簡單機器人。事件與牌的轉換、mjai 牌譜匯入在 `mj_paifu::mjai`（引擎完整紀錄 ↔ mjai 牌譜可來回轉換）。只透過協定溝通，外部 AI 的授權（如 AGPL）不影響本專案。
+- **mj-mjai**（M8）：`MjaiPlayer` 讓說 mjai 協定的 AI 上桌（`Bot` trait；`ProcessBot` = 子行程，一行事件陣列／一行回應，與 mjai.app 相同；立直兩段式；搶槓前補送槓事件）；`PooledBot` 在對局之間重複使用行程；`shadow()` 旁觀模式只記錄選擇，立直改用擴充請求 `mj_peek` 問要打的牌；`bots` 內建簡單機器人。事件與牌的轉換、mjai 牌譜匯入在 `mj_paifu::mjai`（引擎完整紀錄 ↔ mjai 牌譜可來回轉換）。只透過協定溝通，外部 AI 的授權（如 AGPL）不影響本專案。
+- **tools/mortal**（AGPL-3.0-or-later，與專案隔離）：Mortal 的 mjai 包裝（`run.sh s42|hhim8826`）、安裝腳本 `setup.sh`（uv 的 Python 3.12 venv、固定版本的 Mortal 原始碼與 libriichi、權重 SHA-256 檢查，都放在 gitignore 的 `data/mortal/` 與 `tools/mortal/.venv/`）。每個 Mortal 行程約 380 MB；用到 mjai AI 時 `--jobs` 預設依可用記憶體決定。
 - **mj-sim**：參考機器人（`RandomBot`、`GreedyBot`）；`replay`（從完整事件紀錄重建任一時刻的手牌、判定振聽）；`predict_eval`（用 `judge` 判定每個 `Claim` 的真相，算 Brier、技巧分數、校準表，依被預測者情境分組；`collect_records` 在牌譜上旁觀評估）；`counterfactual`（快照 → 重抽 R 個世界 → 各選項以 `Force` 強制後重打，名次點或本局點數，自動加重打）；`duplicate`（同牌山座位輪換的成對比較）；`read_stats`（`mj read-stats`：在牌譜每個打牌時點輸出對手的讀牌特徵＋真相 CSV，用來校準讀牌預測）。
 
 ### 重要的不變條件

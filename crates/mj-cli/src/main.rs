@@ -1,5 +1,6 @@
 //! 命令列工具 `mj`。每個子命令對應一個里程碑的功能；尚未實作的會提示預計在哪個里程碑完成。
 
+mod agree;
 mod evaluate;
 mod import;
 mod nanikiru;
@@ -17,6 +18,9 @@ use std::process::ExitCode;
 #[derive(Parser)]
 #[command(name = "mj", version, about)]
 struct Cli {
+    /// 同時進行的工作數（預設 = CPU 核心數；用到 mjai AI 時依可用記憶體決定，因為每場對局最多要 4 個 AI 行程，每個可能占用數百 MB）
+    #[arg(long, global = true)]
+    jobs: Option<usize>,
     #[command(subcommand)]
     command: Command,
 }
@@ -163,7 +167,7 @@ enum Command {
         /// 每個決策都做反事實評估（預設只評估與策略選擇不同的決策）
         #[arg(long)]
         all: bool,
-        /// 逐手報告列出哪些決策：differences（與策略不同）、mistakes（失誤）、all
+        /// 逐手報告列出哪些決策：differences（與策略不同）、mistakes（失誤）、ai（與 --mjai 的 AI 不同）、all
         #[arg(long, default_value = "differences")]
         show: String,
         /// 每個選項重打幾次（每次是一個重抽過看不到的牌的「可能世界」；越多越準、越慢）
@@ -176,6 +180,30 @@ enum Command {
         #[arg(long)]
         omniscient: bool,
         /// 把復盤結果寫成 JSON 檔
+        #[arg(long)]
+        json: Option<PathBuf>,
+        /// 一起旁觀的 mjai AI（程式與參數，例如 "tools/mortal/run.sh s42"）：列出它的選擇與一致率
+        #[arg(long)]
+        mjai: Option<String>,
+    },
+    /// 一致率：在牌譜（或策略自我對戰）的每個決策點，比較策略、玩家與一個說 mjai 的 AI（例如 Mortal）的選擇，
+    /// 依決策種類與情境分組
+    Agree {
+        /// 牌譜檔或目錄（不給時要用 --selfplay）
+        logs: Vec<PathBuf>,
+        /// 說 mjai 的 AI（程式與參數），例如 "tools/mortal/run.sh s42"
+        #[arg(long)]
+        mjai: String,
+        /// 策略名稱
+        #[arg(long, default_value = "tenhou-normal-4p-hanchan/hand-reading")]
+        strategy: String,
+        /// 改用策略四家自我對戰的這麼多場（比較策略自己會遇到的局面）
+        #[arg(long, default_value_t = 0)]
+        selfplay: u64,
+        /// 自我對戰的起始 seed
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        /// 把一致率寫成 JSON 檔
         #[arg(long)]
         json: Option<PathBuf>,
     },
@@ -247,8 +275,39 @@ enum Command {
     },
 }
 
+/// 用到 mjai AI、沒有指定 `--jobs` 時，同時進行的對局數：每場對局保留 [`MJAI_MB_PER_JOB`] 的可用記憶體。
+fn mjai_jobs() -> usize {
+    let available_mb = std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|m| {
+            m.lines()
+                .find(|l| l.starts_with("MemAvailable:"))?
+                .split_whitespace()
+                .nth(1)?
+                .parse::<u64>()
+                .ok()
+        })
+        .map_or(4 * MJAI_MB_PER_JOB, |kb| kb / 1024);
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    ((available_mb / MJAI_MB_PER_JOB) as usize).clamp(1, cores)
+}
+
+/// 每場有 mjai AI 的對局預留的記憶體（MB）：最多 4 個 AI 行程，Mortal 每個約 380 MB。
+const MJAI_MB_PER_JOB: u64 = 1600;
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    let jobs = cli.jobs.or_else(|| {
+        std::env::args()
+            .any(|a| a.contains("mjai:") || a == "--mjai")
+            .then(mjai_jobs)
+    });
+    if let Some(n) = jobs {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(n.max(1))
+            .build_global()
+            .expect("rayon 執行緒池只建立一次");
+    }
     let milestone = match cli.command {
         Command::Strategies { name } => {
             if let Some(name) = name {
@@ -385,6 +444,7 @@ fn main() -> ExitCode {
             metric,
             omniscient,
             json,
+            mjai,
         } => {
             let metric = match metric.as_str() {
                 "placement" => mj_sim::counterfactual::Metric::Placement,
@@ -404,6 +464,24 @@ fn main() -> ExitCode {
                 rollouts,
                 metric,
                 omniscient,
+                json,
+                mjai: mjai.map(|m| m.split_whitespace().map(String::from).collect()),
+            }));
+        }
+        Command::Agree {
+            logs,
+            mjai,
+            strategy,
+            selfplay,
+            seed,
+            json,
+        } => {
+            return exit(agree::run(&agree::Options {
+                logs,
+                mjai: mjai.split_whitespace().map(String::from).collect(),
+                strategy,
+                selfplay,
+                seed,
                 json,
             }));
         }

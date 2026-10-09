@@ -35,7 +35,7 @@ pub(crate) struct Seat {
     spec: SeatSpec,
 }
 
-/// 解析一個參賽者：`greedy`、`random`、`mjai:<外部程式 參數…>`（說 mjai 協定的 AI，每場對局啟動一個行程）
+/// 解析一個參賽者：`greedy`、`random`、`mjai:<外部程式 參數…>`（說 mjai 協定的 AI；行程在對局之間重複使用）
 /// 或策略名稱「規則／策略」（可加 `@參數覆寫`，見 `find_strategy_spec`；
 /// 座位清單以逗號分隔，所以這裡的多個參數改用分號分隔）。
 pub(crate) fn parse_entrant(s: &str) -> Result<Seat, String> {
@@ -88,8 +88,7 @@ pub(crate) fn make_player(seat: &Seat, seed: u64, i: u64) -> Box<dyn Player> {
         SeatSpec::Random => Box::new(RandomBot::new(s)),
         SeatSpec::Strategy(st) => st.player(false, None),
         SeatSpec::Mjai(cmd) => {
-            let bot =
-                mj_mjai::ProcessBot::spawn(&cmd[0], &cmd[1..]).unwrap_or_else(|e| panic!("{e}"));
+            let bot = mj_mjai::PooledBot::checkout(cmd).unwrap_or_else(|e| panic!("{e}"));
             let names = std::array::from_fn(|_| seat.label.clone());
             Box::new(mj_mjai::MjaiPlayer::new(bot, names))
         }

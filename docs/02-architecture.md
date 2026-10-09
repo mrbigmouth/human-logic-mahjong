@@ -14,7 +14,8 @@
 ```
 mj-core ── mj-calc ── mj-rules ── mj-engine ── mj-tools ── mj-strategy ── mj-sim ─┬─ mj-tuner
                                      │                                            └─ mj-review
-                                     └──────── mj-paifu（牌譜匯入、mjai 格式；mj-sim 使用）── mj-mjai
+                                     └──────── mj-paifu（牌譜匯入、mjai 格式；mj-sim 使用）── mj-mjai（mj-review 使用）
+tools/mortal（AGPL，獨立）：Mortal 的 mjai 機器人，只以子行程經 mjai 協定溝通
 mj-cli / app(Tauri) ── 以上全部
 ```
 
@@ -29,9 +30,9 @@ mj-cli / app(Tauri) ── 以上全部
 | `mj-sim` | 參考機器人（`RandomBot`、`GreedyBot`）；`replay` 牌譜重播；`predict_eval` 預測準確度；`counterfactual` 反事實決策評估；`duplicate` 對戰；`read_stats` 讀牌特徵匯出（M6） | M3 ✅ |
 | `mj-paifu` | 牌譜匯入：天鳳 mjlog XML／JSON → 共通的 `GameRecord` → 還原牌山、照牌譜出牌讓引擎重播並比對點數 → 完整事件紀錄與每個決策點的 `PlayerView`（`DecisionPoint`）；策略可「旁觀」真人對局做預測 | M4 ✅ |
 | `mj-tuner` | 可調參數（`Param`）的自動調整：預測以牌譜上的對數損失（黃金分割）、決策以 duplicate 對戰（`mj tune`） | M8 ✅ |
-| `mj-review` | 牌譜復盤：逐手比對玩家與策略的選擇，附理由；選擇不同處在牌譜局面做反事實評估（玩家 vs 策略的成對差值）；差異分類與失誤彙整（`mj review`） | M7 ✅ |
-| `mj-mjai` | mjai 協定：`MjaiPlayer` 讓外部 AI（子行程）上桌、內建測試機器人（`mj mjai-bot`）；事件轉換與 mjai 牌譜匯入在 `mj_paifu::mjai` | M8 ✅（接 Mortal 待權重） |
-| `mj-cli` | 執行檔 `mj`：`strategies`、`nanikiru`、`selfplay`、`import`、`predict-eval`、`evaluate`、`simulate`、`review`、`play`、`serve` | 持續 |
+| `mj-review` | 牌譜復盤：逐手比對玩家與策略的選擇，附理由；選擇不同處在牌譜局面做反事實評估（玩家 vs 策略的成對差值）；差異分類與失誤彙整（`mj review`）；可掛 mjai AI 一起旁觀，算三方一致率（`mj agree`、`mj review --mjai`） | M7 ✅ / M8 |
+| `mj-mjai` | mjai 協定：`MjaiPlayer` 讓外部 AI（子行程，`PooledBot` 在對局間重複使用）上桌，或以旁觀模式記錄它的選擇；內建測試機器人（`mj mjai-bot`）；事件轉換與 mjai 牌譜匯入在 `mj_paifu::mjai`。Mortal 在 `tools/mortal/` | M8 ✅ |
+| `mj-cli` | 執行檔 `mj`：`strategies`、`nanikiru`、`selfplay`、`import`、`predict-eval`、`evaluate`、`simulate`、`review`、`agree`、`tune`、`params`、`mjai-bot`、`play`、`serve` | 持續 |
 
 ## 關鍵設計
 

@@ -8,3 +8,4 @@ tools/oracle/.venv/
 __pycache__/
 claude.sh
 /data/
+tools/mortal/.venv/
