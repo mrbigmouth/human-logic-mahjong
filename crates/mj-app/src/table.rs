@@ -4,7 +4,7 @@
 //! 牌一律以字串表示（`5m`、`0p` = 赤五筒、`7z` = 中），與專案其他地方的記法相同。
 
 use mj_core::{Meld, MeldKind, Pai, Tile};
-use mj_engine::{DrawReason, Event, HandEnd, Seat};
+use mj_engine::{DrawReason, Event, HandEnd, PlayerView, Seat};
 use mj_rules::riichi::Limit;
 use serde::Serialize;
 
@@ -63,6 +63,9 @@ pub struct SeatView {
     pub riichi: bool,
     /// 手牌已公開（和牌）
     pub revealed: bool,
+    /// 檢視牌譜時公開所有人的手牌：`hand`、`drawn` 是實際的牌（不是和牌）
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub open: bool,
     /// 門風：0 = 東 .. 3 = 北
     pub wind: u8,
 }
@@ -624,4 +627,79 @@ impl TableBuilder {
             auto: false,
         }
     }
+}
+
+/// 由完整事件紀錄產生某個座位視角的幀（每個事件一幀，幀的編號 = 事件的位置）。
+/// `open` = 公開四家的手牌（牌譜檢視用）：四家各自的視角同時推算，再把他家的手牌填進來。
+pub fn log_frames(log: &[Event], seat: Seat, open: bool) -> Vec<Frame> {
+    let mut builders: Vec<TableBuilder> = (0..4).map(TableBuilder::new).collect();
+    log.iter()
+        .map(|ev| {
+            if !open {
+                return builders[usize::from(seat)].apply(&ev.masked_for(seat));
+            }
+            let frames: Vec<Frame> = builders
+                .iter_mut()
+                .enumerate()
+                .map(|(s, b)| b.apply(&ev.masked_for(s as Seat)))
+                .collect();
+            let mut frame = frames[usize::from(seat)].clone();
+            for (s, f) in frames.iter().enumerate() {
+                let v = &mut frame.table.seats[s];
+                if s != usize::from(seat) && !v.revealed {
+                    let own = &f.table.seats[s];
+                    v.hand = own.hand.clone();
+                    v.drawn = own.drawn.clone();
+                    v.open = true;
+                }
+            }
+            frame
+        })
+        .collect()
+}
+
+/// 牌桌與引擎視角不一致的地方（沒有時為 `None`）。用來確認由事件推算的牌桌是對的。
+pub fn table_mismatch(t: &TableView, view: &PlayerView) -> Option<String> {
+    let me = usize::from(t.me);
+    let mut hand: Vec<String> = t.seats[me].hand.clone();
+    hand.extend(t.seats[me].drawn.clone());
+    hand.sort();
+    let mut expected: Vec<String> = view.hand_pais.iter().map(|&p| pai_str(p)).collect();
+    expected.sort();
+    if hand != expected {
+        return Some(format!("手牌不一致：{hand:?} ≠ {expected:?}"));
+    }
+    if t.scores != view.scores {
+        return Some(format!("點數不一致：{:?} ≠ {:?}", t.scores, view.scores));
+    }
+    if t.wall_left != view.tiles_left_in_wall {
+        return Some(format!(
+            "牌山張數不一致：{} ≠ {}",
+            t.wall_left, view.tiles_left_in_wall
+        ));
+    }
+    if t.riichi_sticks != view.riichi_sticks {
+        return Some("供託不一致".into());
+    }
+    for s in 0..4 {
+        let seat = &t.seats[s];
+        let river: Vec<String> = view.rivers[s].iter().map(|d| pai_str(d.pai)).collect();
+        let shown: Vec<String> = seat.river.iter().map(|r| r.pai.clone()).collect();
+        if shown != river {
+            return Some(format!("座位 {s} 的牌河不一致"));
+        }
+        if seat.melds.len() != view.melds[s].len() {
+            return Some(format!("座位 {s} 的副露不一致"));
+        }
+        if seat.riichi != view.riichi[s] {
+            return Some(format!("座位 {s} 的立直不一致"));
+        }
+        // 門前張數 + 副露張數（槓算 3 張）= 13 或 14。
+        let melded: usize = view.melds[s].iter().map(|m| m.tiles.len().min(3)).sum();
+        let total = usize::from(seat.hand_count) + melded;
+        if total != 13 && total != 14 {
+            return Some(format!("座位 {s} 的手牌張數 {total} 不對"));
+        }
+    }
+    None
 }

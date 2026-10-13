@@ -1,9 +1,9 @@
-// 復盤：對局結束後在背景做反事實評估，列出與策略選擇不同的決策、理由、期望值差與失誤統計。
-// 點一個決策可以看當時的牌桌。
+// 復盤：對讀入的牌譜（剛打完的對局也先讀入）的一家，在背景做反事實評估，
+// 列出與策略選擇不同的決策、理由、期望值差與失誤統計。點一個決策可以看當時的牌桌，或跳到牌譜檢視器。
 
 import { useEffect, useState } from "react";
 import { call } from "./api";
-import { Board } from "./Board";
+import { Board, shortName } from "./Board";
 import { Hand } from "./Game";
 import { TileText } from "./Tile";
 import {
@@ -11,16 +11,19 @@ import {
   MISTAKE_Z,
   type Frame,
   type GroupSummary,
-  type NewGame,
+  type LogFrames,
+  type LogInfo,
   type ReviewConfig,
   type ReviewState,
   type Reviewed,
+  type Seat,
 } from "./types";
 
 interface Props {
-  game: NewGame;
-  frames: Frame[];
-  askFrames: Map<number, number>;
+  info: LogInfo;
+  seat: Seat;
+  /** 在牌譜檢視器中打開第幾幀 */
+  onView: (frame: number) => void;
   onQuit: () => void;
 }
 
@@ -71,23 +74,39 @@ function SummaryTable({ rows, unit }: { rows: GroupSummary[]; unit: string }) {
   );
 }
 
-export function Review({ game, frames, askFrames, onQuit }: Props) {
+export function Review({ info, seat, onView, onQuit }: Props) {
   const [config, setConfig] = useState<ReviewConfig>({ rollouts: 32, metric: "points" });
   const [state, setState] = useState<ReviewState>({ state: "idle" });
+  const [frames, setFrames] = useState<Frame[]>([]);
+  const [askFrames, setAskFrames] = useState(new Map<number, number>());
+
+  useEffect(() => {
+    call<LogFrames>("log_frames", { seat, open: false }).then(
+      (f) => {
+        setFrames(f.frames);
+        setAskFrames(new Map(f.asks));
+      },
+      (e) => setState({ state: "failed", error: String(e) }),
+    );
+    // 已經復盤過（例如從檢視器回來）就直接顯示結果。
+    call<ReviewState>("log_review", { seat }).then((r) => {
+      if (r.state !== "idle") setState(r);
+    });
+  }, [seat]);
   const [filter, setFilter] = useState<"diff" | "all">("diff");
   const [selected, setSelected] = useState<Reviewed | null>(null);
 
   useEffect(() => {
     if (state.state !== "running") return;
     const t = setInterval(() => {
-      call<ReviewState>("review").then(setState, (e) => setState({ state: "failed", error: String(e) }));
+      call<ReviewState>("log_review", { seat }).then(setState, (e) => setState({ state: "failed", error: String(e) }));
     }, 1000);
     return () => clearInterval(t);
-  }, [state.state]);
+  }, [state.state, seat]);
 
   const start = async () => {
     try {
-      await call("start_review", config);
+      await call("start_log_review", { seat, ...config });
       setState({ state: "running", seconds: 0 });
     } catch (e) {
       setState({ state: "failed", error: String(e) });
@@ -99,7 +118,7 @@ export function Review({ game, frames, askFrames, onQuit }: Props) {
   if (state.state === "idle" || state.state === "failed") {
     return (
       <div className="review setup">
-        <h1>復盤</h1>
+        <h1>復盤：{shortName(info.names[seat])}</h1>
         <p className="lead">
           逐手比較你與策略的選擇。選擇不同的地方，會從當時的局面依你看得到的資訊重抽對手手牌與牌山，
           兩個選項各重打很多次比較結果。
@@ -130,7 +149,7 @@ export function Review({ game, frames, askFrames, onQuit }: Props) {
           <button className="primary big" onClick={start}>
             開始復盤
           </button>
-          <button onClick={onQuit}>新對局</button>
+          <button onClick={onQuit}>返回</button>
         </div>
       </div>
     );
@@ -155,13 +174,13 @@ export function Review({ game, frames, askFrames, onQuit }: Props) {
     <div className="review">
       <div className="review-list">
         <div className="review-head">
-          <h1>復盤</h1>
+          <h1>復盤：{shortName(info.names[seat])}</h1>
           <div className="buttons">
             <label>
               <input type="checkbox" checked={filter === "all"} onChange={(e) => setFilter(e.target.checked ? "all" : "diff")} />
               顯示所有決策
             </label>
-            <button onClick={onQuit}>新對局</button>
+            <button onClick={onQuit}>返回</button>
           </div>
         </div>
         <p className="muted">
@@ -214,13 +233,18 @@ export function Review({ game, frames, askFrames, onQuit }: Props) {
           <>
             {table && (
               <div className="mini">
-                <Board table={table} names={game.names} />
+                <Board table={table} names={info.names} />
                 <Hand table={table} ask={null} riichiMode={false} setRiichiMode={() => {}} hint={null} onAct={() => {}} />
               </div>
             )}
             <div className="panel">
               <h3>
                 {selected.round}　第 {selected.turn} 巡　【{KIND_NAMES[selected.kind]}】
+                {selFrame !== undefined && (
+                  <button className="small" onClick={() => onView(Math.max(0, selFrame - 1))}>
+                    在牌譜中檢視
+                  </button>
+                )}
               </h3>
               <table className="options">
                 <thead>

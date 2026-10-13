@@ -91,12 +91,13 @@ function River({ river, last }: { river: RiverTile[]; last: number | null }) {
 }
 
 function OpponentHand({ seat }: { seat: SeatView }) {
-  if (seat.revealed) {
+  if (seat.revealed || seat.open) {
     return (
-      <div className="opp-hand revealed">
+      <div className={`opp-hand ${seat.revealed ? "revealed" : "open"}`}>
         {seat.hand.map((p, i) => (
           <Tile key={i} pai={p} />
         ))}
+        {seat.drawn && <Tile pai={seat.drawn} className="drawn" />}
       </div>
     );
   }

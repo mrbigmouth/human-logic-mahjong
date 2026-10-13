@@ -25,6 +25,8 @@ export interface SeatView {
   river: RiverTile[];
   riichi: boolean;
   revealed: boolean;
+  /** 檢視牌譜時公開所有人的手牌（hand、drawn 是實際的牌） */
+  open?: boolean;
   wind: number;
 }
 
@@ -250,3 +252,26 @@ export const KIND_NAMES: Record<DecisionKind, string> = {
 
 /** 單一決策判為明顯失誤的門檻（與 mj-review 的 MISTAKE_Z 相同）。 */
 export const MISTAKE_Z = 3.0;
+
+/** 本專案匯出的牌譜附帶的資訊（mjai `start_game` 的 `mj_meta`）。 */
+export interface LogMeta {
+  seed?: number | null;
+  seat?: Seat | null;
+  strategy?: string | null;
+}
+
+/** 讀入的牌譜的概要。 */
+export interface LogInfo {
+  id: string;
+  names: [string, string, string, string];
+  hands: number;
+  final_scores: [number, number, number, number];
+  meta: LogMeta | null;
+  events: number;
+}
+
+/** 某個座位視角的全部幀；asks = [詢問編號, 詢問當時的幀數]。 */
+export interface LogFrames {
+  frames: Frame[];
+  asks: [number, number][];
+}

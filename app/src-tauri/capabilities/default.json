@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "主視窗的權限（只用到自訂的 api command）",
+  "description": "主視窗的權限：自訂的 command（api、save_text）與另存新檔對話框",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:allow-save"]
 }

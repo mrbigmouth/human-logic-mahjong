@@ -1,16 +1,17 @@
 // 對局畫面：向核心長輪詢新的事件幀，依序播放（AI 的動作有間隔），輪到自己時顯示操作與提示。
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
-import { call } from "./api";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { call, saveText } from "./api";
 import { Board, Meld, REL_NAMES, WINDS, relative, shortName } from "./Board";
+import { useBoardSize } from "./layout";
 import { play, type SoundKind } from "./sounds";
 import { Tile, TileText, Tiles } from "./Tile";
 import type { ActionView, Ask, EventView, Frame, GameOver, NewGame, TableView, Update } from "./types";
 
 interface Props {
   game: NewGame;
-  /** 對局結束後要復盤：傳回每次詢問（編號 = act_index + 1）對應的幀 */
-  onReview: (frames: Frame[], askFrames: Map<number, number>) => void;
+  /** 對局結束後：復盤或檢視這場的牌譜（App 會把牌譜讀入後切換畫面） */
+  onOpenLog: (target: "review" | "view") => void;
   onQuit: () => void;
 }
 
@@ -31,7 +32,7 @@ function delayFor(ev: EventView, me: number, speed: number): number {
   }
 }
 
-export function Game({ game, onReview, onQuit }: Props) {
+export function Game({ game, onOpenLog, onQuit }: Props) {
   const [frames, setFrames] = useState<Frame[]>([]);
   const [pos, setPos] = useState(0);
   const [ask, setAsk] = useState<Ask | null>(null);
@@ -48,7 +49,6 @@ export function Game({ game, onReview, onQuit }: Props) {
   const area = useRef<HTMLDivElement>(null);
   const handArea = useRef<HTMLDivElement>(null);
   const boardSize = useBoardSize(area, handArea, frames.length > 0);
-  const askFrames = useRef(new Map<number, number>());
   const next = useRef(0);
   const waiting = useRef(false);
 
@@ -79,7 +79,6 @@ export function Game({ game, onReview, onQuit }: Props) {
             return;
           }
           if (u.ask) {
-            askFrames.current.set(u.ask.id, u.ask.frame);
             setAsk(u.ask);
             return;
           }
@@ -276,7 +275,8 @@ export function Game({ game, onReview, onQuit }: Props) {
         <GameResult
           over={over}
           names={game.names}
-          onReview={() => onReview(frames, askFrames.current)}
+          seed={game.seed}
+          onOpenLog={onOpenLog}
           onQuit={onQuit}
         />
       )}
@@ -299,43 +299,6 @@ function soundFor(ev: EventView): SoundKind | null {
       return null;
   }
 }
-
-/**
- * 牌桌邊長（px）：牌桌區域扣掉自己手牌區的實際高度後，取寬高中較小的。
- * 自己的手牌疊在牌桌下緣的空白帶上（[`HAND_OVERLAP`] × 邊長，那裡原本只有自己的牌河以下的空位）。
- * 手牌的大小又依牌桌邊長而定，所以兩者都監看大小變化，幾次之內就會穩定。
- */
-function useBoardSize(
-  area: RefObject<HTMLDivElement | null>,
-  hand: RefObject<HTMLDivElement | null>,
-  /** 牌桌已經畫出來（之前是「準備中」畫面，還沒有可以量的元素） */
-  ready: boolean,
-): number {
-  const [size, setSize] = useState(600);
-  useEffect(() => {
-    const el = area.current;
-    const h = hand.current;
-    if (!el || !h) return;
-    const update = () => {
-      const style = getComputedStyle(el);
-      const pad = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
-      const gap = parseFloat(style.rowGap) || 0;
-      const w = el.clientWidth - 16;
-      const free = (el.clientHeight - pad - gap - h.offsetHeight) / (1 - HAND_OVERLAP);
-      const next = Math.max(280, Math.floor(Math.min(w, free)));
-      setSize((old) => (Math.abs(old - next) > 1 ? next : old));
-    };
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    ro.observe(h);
-    return () => ro.disconnect();
-  }, [area, hand, ready]);
-  return size;
-}
-
-/** 自己的手牌疊進牌桌下緣的比例（與 styles.css 的 `.hand-wrap` 一致）。 */
-const HAND_OVERLAP = 0.09;
 
 /** 對局資訊：四家的參賽者、seed。 */
 function GameInfo({ game, table }: { game: NewGame; table: TableView }) {
@@ -594,23 +557,26 @@ function HandResult({ frame, names, onContinue }: { frame: Frame; names: string[
 function GameResult({
   over,
   names,
-  onReview,
+  seed,
+  onOpenLog,
   onQuit,
 }: {
   over: GameOver;
   names: string[];
-  onReview: () => void;
+  seed: number;
+  onOpenLog: (target: "review" | "view") => void;
   onQuit: () => void;
 }) {
   const order = [0, 1, 2, 3].sort((a, b) => over.ranks[a] - over.ranks[b]);
-  const download = async () => {
-    const text = await call<string>("log");
-    const blob = new Blob([text], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `mahjong-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "")}.mjson`;
-    a.click();
-    URL.revokeObjectURL(a.href);
+  const [saved, setSaved] = useState<string | null>(null);
+  const save = async () => {
+    try {
+      const text = await call<string>("log");
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "");
+      if (await saveText(`mahjong-${stamp}-${seed}.mjson`, text)) setSaved("已儲存");
+    } catch (e) {
+      setSaved(`無法儲存：${String(e)}`);
+    }
   };
   return (
     <div className="modal">
@@ -628,12 +594,14 @@ function GameResult({
           </tbody>
         </table>
         <div className="buttons">
-          <button className="primary" onClick={onReview}>
+          <button className="primary" onClick={() => onOpenLog("review")}>
             復盤
           </button>
-          <button onClick={download}>下載牌譜</button>
+          <button onClick={() => onOpenLog("view")}>檢視牌譜</button>
+          <button onClick={save}>儲存牌譜</button>
           <button onClick={onQuit}>新對局</button>
         </div>
+        {saved && <div className="muted">{saved}</div>}
       </div>
     </div>
   );

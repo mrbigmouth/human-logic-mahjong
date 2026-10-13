@@ -10,9 +10,15 @@
 //! | `act` | `{ ask, index }` | `null` |
 //! | `start_review` | [`ReviewConfig`] | `null` |
 //! | `review` | — | [`ReviewState`](crate::ReviewState) |
-//! | `log` | — | mjai 格式的牌譜（字串） |
+//! | `log` | — | 剛打完的對局的 mjai 牌譜（字串，`start_game` 附 `mj_meta`） |
+//! | `load_log` | `{ text, name }` | [`LogInfo`](crate::LogInfo)：讀入牌譜（天鳳 XML／JSON、mjai），以引擎重播；取代之前讀入的 |
+//! | `log_info` | — | 目前讀入的牌譜的 [`LogInfo`](crate::LogInfo) |
+//! | `log_frames` | `{ seat, open }` | [`LogFrames`](crate::LogFrames)：該座位視角的全部幀；`open` = 公開四家手牌 |
+//! | `start_log_review` | `{ seat, strategy?, ...ReviewConfig }` | `null`：復盤讀入的牌譜（策略預設為牌譜記載的提示策略） |
+//! | `log_review` | `{ seat }` | 這個座位的 [`ReviewState`](crate::ReviewState) |
 
-use crate::session::{ReviewConfig, Session, SessionConfig};
+use crate::paifu::LoadedLog;
+use crate::session::{DEFAULT_STRATEGY, ReviewConfig, Session, SessionConfig};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
@@ -21,10 +27,39 @@ use std::time::Duration;
 /// 長輪詢最多等多久。
 const MAX_WAIT: Duration = Duration::from_secs(30);
 
-/// App 的狀態：目前的對局（同時只有一場；開新局會丟棄舊的）。
+/// App 的狀態：目前的對局（同時只有一場；開新局會丟棄舊的）與讀入的牌譜（同時只有一份）。
 #[derive(Default)]
 pub struct App {
     session: Mutex<Option<Arc<Session>>>,
+    loaded: Mutex<Option<Arc<LoadedLog>>>,
+}
+
+#[derive(Deserialize)]
+struct LoadArgs {
+    text: String,
+    #[serde(default)]
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct FramesArgs {
+    seat: u8,
+    #[serde(default)]
+    open: bool,
+}
+
+#[derive(Deserialize)]
+struct SeatArgs {
+    seat: u8,
+}
+
+#[derive(Deserialize)]
+struct LogReviewArgs {
+    seat: u8,
+    #[serde(default)]
+    strategy: Option<String>,
+    #[serde(flatten)]
+    config: ReviewConfig,
 }
 
 #[derive(Deserialize)]
@@ -98,6 +133,14 @@ impl App {
             .ok_or_else(|| "還沒有開始對局".to_string())
     }
 
+    fn loaded(&self) -> Result<Arc<LoadedLog>, String> {
+        self.loaded
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .ok_or_else(|| "還沒有讀入牌譜".to_string())
+    }
+
     /// 執行一個 API 呼叫。
     pub fn call(&self, name: &str, params: Value) -> Result<Value, String> {
         match name {
@@ -139,6 +182,34 @@ impl App {
                 .mjai_log()
                 .map(Value::String)
                 .ok_or_else(|| "對局還沒結束".to_string()),
+            "load_log" => {
+                let a: LoadArgs = args(params)?;
+                let id = a.name.rsplit(['/', '\\']).next().unwrap_or_default();
+                let id = id.rsplit_once('.').map_or(id, |(stem, _)| stem);
+                let log = LoadedLog::parse(&a.text, id)?;
+                let info = log.info();
+                *self.loaded.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(log));
+                to_json(&info)
+            }
+            "log_info" => to_json(&self.loaded()?.info()),
+            "log_frames" => {
+                let a: FramesArgs = args(params)?;
+                to_json(&self.loaded()?.frames(a.seat, a.open)?)
+            }
+            "start_log_review" => {
+                let a: LogReviewArgs = args(params)?;
+                let log = self.loaded()?;
+                let strategy = a
+                    .strategy
+                    .or_else(|| log.meta.as_ref().and_then(|m| m.strategy.clone()))
+                    .unwrap_or_else(|| DEFAULT_STRATEGY.to_string());
+                log.start_review(a.seat, &strategy, &a.config)?;
+                Ok(Value::Null)
+            }
+            "log_review" => {
+                let a: SeatArgs = args(params)?;
+                to_json(&self.loaded()?.review(a.seat))
+            }
             _ => Err(format!("沒有這個 API：{name}")),
         }
     }

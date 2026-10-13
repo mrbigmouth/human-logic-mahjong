@@ -27,7 +27,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | # | 類型 | 內容 | 狀態 |
 |---|---|---|---|
 | M11 | 介面 | 牌桌介面改善：文字正置、四家點數、版面與可折疊面板、立直後自動摸切、音效、同種牌標示 | ✅ |
-| M12 | 介面 | 牌譜存取與檢視器：匯出、讀入（天鳳／mjai）、逐打檢視、讀入的牌譜可復盤 | |
+| M12 | 介面 | 牌譜存取與檢視器：匯出、讀入（天鳳／mjai）、逐打檢視、讀入的牌譜可復盤 | ✅ |
 | M13 | 介面＋工具 | 和牌路線提示（`mj-tools` 的 `win_routes`） | |
 | M14 | 評估＋介面 | 反事實實驗：對局與復盤中比較各選項「之後依策略打」的結果 | |
 | M15 | 評估＋介面 | GUI 對戰測試平台：在 App 中執行 selfplay／simulate／場地對戰／預測評估，逐場檢視與實驗 | |
@@ -115,8 +115,8 @@ Crate 相依鏈：`mj-core → mj-calc → mj-rules → mj-engine → mj-tools �
 - **mj-tuner**（M8）：座標搜尋調整 `Param`：預測以牌譜上的對數損失（黃金分割）、決策以 duplicate（候選值與目前值直接對戰，好過 2 個標準誤才採用）。
 - **mj-mjai**（M8）：`MjaiPlayer` 讓說 mjai 協定的 AI 上桌（`Bot` trait；`ProcessBot` = 子行程，一行事件陣列／一行回應，與 mjai.app 相同；立直兩段式；搶槓前補送槓事件）；`PooledBot` 在對局之間重複使用行程；`shadow()` 旁觀模式只記錄選擇，立直改用擴充請求 `mj_peek` 問要打的牌；`bots` 內建簡單機器人。事件與牌的轉換、mjai 牌譜匯入在 `mj_paifu::mjai`（引擎完整紀錄 ↔ mjai 牌譜可來回轉換）。只透過協定溝通，外部 AI 的授權（如 AGPL）不影響本專案。
 - **tools/mortal**（AGPL-3.0-or-later，與專案隔離）：Mortal 的 mjai 包裝（`run.sh s42|hhim8826`）、安裝腳本 `setup.sh`（uv 的 Python 3.12 venv、固定版本的 Mortal 原始碼與 libriichi、權重 SHA-256 檢查，都放在 gitignore 的 `data/mortal/` 與 `tools/mortal/.venv/`）。每個 Mortal 行程約 380 MB；用到 mjai AI 時 `--jobs` 預設依可用記憶體決定。
-- **mj-app**（M9）：練習 App 的核心，與 UI 無關。`Session` 在背景執行緒進行一場對局（人類座位 `HumanSeat` 詢問時暫停，等 `act`；立直後只能摸切時自動打出、幀標記 `auto`；提示策略在人類座位旁觀，每次詢問附上策略的選擇、理由與牌效表）；`table::TableBuilder` 把人類視角的事件轉成「事件＋牌桌」的幀（除錯建置時每次詢問都與引擎的 `PlayerView` 比對）；對局後轉成牌譜交給 `mj-review` 復盤。`api::App::call(名稱, JSON)` 是 UI 唯一的入口：`mj serve` 的 `POST /api/<名稱>` 與 Tauri 的 `api` command 都轉給它，前端 `app/src/api.ts` 依環境選一種。修改 JSON 結構時同步更新 `app/src/types.ts`。
-- **app/**（M9，M11 改版面）：前端。`Game.tsx` 長輪詢 `poll` 取得新幀並依序播放（一局結果停下等「繼續」），詢問要等播放追上才顯示；牌桌邊長由 `useBoardSize` 依可用空間計算（CSS 變數 `--B`，所有大小依它），自己的手牌疊在牌桌下緣，資訊在下方可折疊面板；`Board.tsx` 牌河與手牌畫成坐在下方再旋轉，文字（點數、名稱）放在不旋轉的圖層；`Tile.tsx` 的 `HoverProvider` 做同種牌標示；`sounds.ts` 以 Web Audio 合成音效；`Review.tsx` 復盤（點決策看當時牌桌，靠 `ask.id - 1 = act_index` 對應幀）。牌圖是 FluffyStuff 的 CC0 素材（`app/public/tiles/`）。
+- **mj-app**（M9）：練習 App 的核心，與 UI 無關。`Session` 在背景執行緒進行一場對局（人類座位 `HumanSeat` 詢問時暫停，等 `act`；立直後只能摸切時自動打出、幀標記 `auto`；提示策略在人類座位旁觀，每次詢問附上策略的選擇、理由與牌效表）；`table::TableBuilder` 把人類視角的事件轉成「事件＋牌桌」的幀（除錯建置時每次詢問都與引擎的 `PlayerView` 比對）；對局後轉成牌譜交給 `mj-review` 復盤（`review.rs` 的背景工作）。`paifu.rs` 的 `LoadedLog`（M12）讀入牌譜並重播，`table::log_frames` 產生任一座位視角（可公開手牌）的幀；剛打完的對局也先讀入再檢視或復盤；`table::table_mismatch` 檢查牌桌與引擎視角一致。`api::App::call(名稱, JSON)` 是 UI 唯一的入口：`mj serve` 的 `POST /api/<名稱>` 與 Tauri 的 `api` command 都轉給它，前端 `app/src/api.ts` 依環境選一種。修改 JSON 結構時同步更新 `app/src/types.ts`。
+- **app/**（M9，M11 改版面）：前端。`Game.tsx` 長輪詢 `poll` 取得新幀並依序播放（一局結果停下等「繼續」），詢問要等播放追上才顯示；牌桌邊長由 `useBoardSize` 依可用空間計算（CSS 變數 `--B`，所有大小依它），自己的手牌疊在牌桌下緣，資訊在下方可折疊面板；`Board.tsx` 牌河與手牌畫成坐在下方再旋轉，文字（點數、名稱）放在不旋轉的圖層；`Tile.tsx` 的 `HoverProvider` 做同種牌標示；`sounds.ts` 以 Web Audio 合成音效；`Viewer.tsx` 牌譜檢視器、`LogScreen.tsx` 讀入後選玩家；`Review.tsx` 復盤（點決策看當時牌桌，靠 `ask.id - 1 = act_index` 對應幀）。存檔走 `api.ts` 的 `saveText`（桌面版：dialog 外掛＋只在 Tauri 的 command `save_text`；不放進 `App::call`，避免 `mj serve` 開放寫檔）。牌圖是 FluffyStuff 的 CC0 素材（`app/public/tiles/`）。
 - **mj-sim**：參考機器人（`RandomBot`、`GreedyBot`）；`replay`（從完整事件紀錄重建任一時刻的手牌、判定振聽）；`predict_eval`（用 `judge` 判定每個 `Claim` 的真相，算 Brier、技巧分數、校準表，依被預測者情境分組；`collect_records` 在牌譜上旁觀評估）；`counterfactual`（快照 → 重抽 R 個世界 → 各選項以 `Force` 強制後重打，名次點或本局點數，自動加重打）；`duplicate`（同牌山座位輪換的成對比較）；`read_stats`（`mj read-stats`：在牌譜每個打牌時點輸出對手的讀牌特徵＋真相 CSV，用來校準讀牌預測）。
 
 ### 重要的不變條件

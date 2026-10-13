@@ -1,5 +1,7 @@
 //! 桌面版練習 App（M9）：前端與 `mj serve` 相同，只是 API 改走 Tauri command。
-//! 唯一的 command `api(name, args)` 轉給 [`mj_app::App::call`]（`poll` 是長輪詢，所以在背景執行緒執行）。
+//! command `api(name, args)` 轉給 [`mj_app::App::call`]（`poll` 是長輪詢，所以在背景執行緒執行）。
+//! 另有桌面版專用的 `save_text(path, text)`：把牌譜存到使用者在「另存新檔」對話框（dialog 外掛）選的位置
+//! （網頁版用瀏覽器下載；寫檔不放進 `App::call`，免得 `mj serve` 開放任意寫檔）。
 
 // Windows 的 release 版不開主控台視窗。
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -20,10 +22,17 @@ async fn api(
         .map_err(|e| e.to_string())?
 }
 
+/// 寫入文字檔（路徑來自使用者在另存新檔對話框中的選擇）。
+#[tauri::command]
+fn save_text(path: String, text: String) -> Result<(), String> {
+    std::fs::write(&path, text).map_err(|e| format!("無法寫入 {path}：{e}"))
+}
+
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(Arc::new(App::new()))
-        .invoke_handler(tauri::generate_handler![api])
+        .invoke_handler(tauri::generate_handler![api, save_text])
         .run(tauri::generate_context!())
         .expect("無法啟動 App");
 }

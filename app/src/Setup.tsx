@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { call } from "./api";
-import type { NewGame, Seat, SessionConfig, StrategyInfo } from "./types";
+import type { LogInfo, NewGame, Seat, SessionConfig, StrategyInfo } from "./types";
 
 const DEFAULT = "tenhou-normal-4p-hanchan/hand-reading";
 
@@ -15,7 +15,13 @@ function load<T>(key: string, fallback: T): T {
   }
 }
 
-export function Setup({ onStart }: { onStart: (g: NewGame) => void }) {
+interface Props {
+  onStart: (g: NewGame) => void;
+  /** 讀入牌譜檔之後 */
+  onLoaded: (info: LogInfo) => void;
+}
+
+export function Setup({ onStart, onLoaded }: Props) {
   const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
   const [entrants, setEntrants] = useState<StrategyInfo[]>([]);
   const [opponents, setOpponents] = useState<[string, string, string]>(() =>
@@ -29,6 +35,21 @@ export function Setup({ onStart }: { onStart: (g: NewGame) => void }) {
   const seedTooLarge = seed !== "" && !Number.isSafeInteger(Number(seed));
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  /** 讀入牌譜檔（天鳳 mjlog XML／JSON、mjai）：在核心中重播，成功後切到牌譜畫面。 */
+  const loadFile = async (file: File) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const text = await file.text();
+      onLoaded(await call<LogInfo>("load_log", { text, name: file.name }));
+    } catch (e) {
+      setError(`無法讀入 ${file.name}：${String(e)}`);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     call<StrategyInfo[]>("strategies").then(setStrategies, (e) => setError(String(e)));
@@ -125,9 +146,25 @@ export function Setup({ onStart }: { onStart: (g: NewGame) => void }) {
         </label>
       </div>
       {error && <div className="error">{error}</div>}
-      <button className="primary big" onClick={start} disabled={starting || strategies.length === 0 || seedTooLarge}>
-        開始對局
-      </button>
+      <div className="buttons">
+        <button className="primary big" onClick={start} disabled={starting || strategies.length === 0 || seedTooLarge}>
+          開始對局
+        </button>
+        <label className={`button big ${loading ? "disabled" : ""}`} title="天鳳牌譜（mjlog XML、JSON）或 mjai 牌譜（本 App 儲存的 .mjson）">
+          {loading ? "讀入中…" : "讀入牌譜…"}
+          <input
+            type="file"
+            accept=".mjson,.json,.jsonl,.xml,.mjlog,.txt"
+            hidden
+            disabled={loading}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = "";
+              if (f) void loadFile(f);
+            }}
+          />
+        </label>
+      </div>
     </div>
   );
 }

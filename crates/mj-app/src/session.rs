@@ -1,14 +1,15 @@
 //! 對局 session：人類一個座位、其餘座位是 AI。對局在背景執行緒進行，輪到人類時暫停，
 //! 等 UI 送來動作（[`Session::act`]）。UI 以 [`Session::poll`] 取得新的事件幀與目前的詢問。
 
-use crate::table::{Frame, TableBuilder, seat_name};
+use crate::paifu::{LogMeta, with_meta};
+use crate::review::ReviewJob;
+pub use crate::review::{ReviewConfig, ReviewState};
+use crate::table::{Frame, TableBuilder, seat_name, table_mismatch};
 use mj_core::Pai;
 use mj_engine::{Action, Event, GameConfig, Player, PlayerView, Seat, run_game};
 use mj_mjai::{MjaiPlayer, PooledBot};
-use mj_review::{GameReview, Options as ReviewOptions, Summary, review_game, summarize};
 use mj_rules::riichi::RiichiConfig;
 use mj_sim::bots::{GreedyBot, RandomBot};
-use mj_sim::counterfactual::{Metric, Options as CfOptions};
 use mj_strategy::find_strategy_spec;
 use mj_strategy::framework::{Strategy, StrategyPlayer};
 use serde::{Deserialize, Serialize};
@@ -174,48 +175,6 @@ pub struct GameOver {
     pub hands_played: u32,
 }
 
-/// 復盤狀態。
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "state", rename_all = "snake_case")]
-pub enum ReviewState {
-    /// 還沒開始
-    Idle,
-    /// 進行中（已經過的秒數）
-    Running {
-        seconds: f64,
-    },
-    Done {
-        review: Box<GameReview>,
-        summary: Box<Summary>,
-        seconds: f64,
-    },
-    Failed {
-        error: String,
-    },
-}
-
-/// 復盤設定。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ReviewConfig {
-    /// 每個選擇不同的決策重打幾個世界
-    pub rollouts: usize,
-    /// points = 這一局的點數得失；placement = 名次點（打到整場結束，較慢）
-    pub metric: String,
-    /// 一起比較的 mjai AI（例如 `tools/mortal/run.sh s42`）
-    pub mjai: Option<String>,
-}
-
-impl Default for ReviewConfig {
-    fn default() -> Self {
-        ReviewConfig {
-            rollouts: 32,
-            metric: "points".into(),
-            mjai: None,
-        }
-    }
-}
-
 /// [`Session::poll`] 的回應。
 #[derive(Debug, Clone, Serialize)]
 pub struct Update {
@@ -241,8 +200,6 @@ struct State {
     error: Option<String>,
     /// 完整事件紀錄（對局結束後才有）
     log: Vec<Event>,
-    review: Option<ReviewState>,
-    review_started: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -322,26 +279,10 @@ impl HumanSeat {
 impl HumanSeat {
     /// 除錯建置時確認由事件推算的牌桌與引擎的視角一致。
     fn check_table(&self, view: &PlayerView) {
-        if cfg!(debug_assertions) {
-            let t = self.builder.table();
-            assert_eq!(self.builder.my_hand(), view.hand_pais, "手牌不一致");
-            assert_eq!(t.scores, view.scores, "點數不一致");
-            assert_eq!(t.wall_left, view.tiles_left_in_wall, "牌山張數不一致");
-            assert_eq!(t.riichi_sticks, view.riichi_sticks, "供託不一致");
-            for s in 0..4 {
-                let seat = &t.seats[s];
-                assert_eq!(seat.river.len(), view.rivers[s].len(), "牌河不一致");
-                assert_eq!(seat.melds.len(), view.melds[s].len(), "副露不一致");
-                assert_eq!(seat.riichi, view.riichi[s], "立直不一致");
-                let hidden = view.melds[s].iter().map(|m| m.tiles.len()).sum::<usize>();
-                // 四家門前張數 + 副露張數（槓算 4 張）= 13 或 14 張再加上槓數。
-                let kans = view.melds[s].iter().filter(|m| m.tiles.len() == 4).count();
-                let total = usize::from(seat.hand_count) + hidden - kans;
-                assert!(
-                    total == 13 || total == 14,
-                    "座位 {s} 的手牌張數 {total} 不對"
-                );
-            }
+        if cfg!(debug_assertions)
+            && let Some(e) = table_mismatch(self.builder.table(), view)
+        {
+            panic!("{e}");
         }
     }
 }
@@ -452,6 +393,7 @@ pub struct Session {
     strategy: Arc<dyn Strategy>,
     shared: Arc<Shared>,
     actions: Sender<Action>,
+    review: ReviewJob,
 }
 
 impl Session {
@@ -531,6 +473,7 @@ impl Session {
             strategy,
             shared,
             actions: tx,
+            review: ReviewJob::default(),
         })
     }
 
@@ -595,87 +538,32 @@ impl Session {
 
     /// 開始復盤人類座位（背景執行；對局結束後才能開始）。
     pub fn start_review(&self, rc: &ReviewConfig) -> Result<(), String> {
-        let metric = match rc.metric.as_str() {
-            "points" => Metric::Points,
-            "placement" => Metric::Placement,
-            m => return Err(format!("不認得的衡量方式 {m}（points 或 placement）")),
-        };
-        let record = {
-            let mut s = self.shared.lock();
-            if s.game_over.is_none() {
-                return Err("對局還沒結束".into());
-            }
-            if matches!(s.review, Some(ReviewState::Running { .. })) {
-                return Ok(());
-            }
-            let text: Vec<String> = mj_paifu::mjai::events_to_mjai(&s.log, None, &self.names)
-                .iter()
-                .map(|v| v.to_string())
-                .collect();
-            let record = mj_paifu::parse(&text.join("\n"), &format!("session-{}", self.seed))?;
-            s.review = Some(ReviewState::Running { seconds: 0.0 });
-            s.review_started = Some(Instant::now());
-            record
-        };
-        let opts = ReviewOptions {
-            seats: vec![self.me()],
-            all: false,
-            eval: CfOptions {
-                samples: 0,
-                rollouts: rc.rollouts,
-                max_rollouts: rc.rollouts,
-                metric,
-                determinize: true,
-                kinds: Vec::new(),
-            },
-            evaluate: rc.rollouts > 0,
-            mjai: rc
-                .mjai
-                .as_ref()
-                .map(|m| m.split_whitespace().map(String::from).collect()),
-        };
-        let st = self.strategy.clone();
-        let sh = self.shared.clone();
-        std::thread::Builder::new()
-            .name("mj-review".into())
-            .spawn(move || {
-                let start = Instant::now();
-                let r = review_game(&st, &record, &opts);
-                sh.update(|s| {
-                    s.review = Some(match r {
-                        Ok(review) => ReviewState::Done {
-                            summary: Box::new(summarize(std::slice::from_ref(&review))),
-                            review: Box::new(review),
-                            seconds: start.elapsed().as_secs_f64(),
-                        },
-                        Err(error) => ReviewState::Failed { error },
-                    })
-                });
-            })
-            .map_err(|e| format!("無法建立復盤執行緒：{e}"))?;
-        Ok(())
+        let text = self.mjai_log().ok_or("對局還沒結束")?;
+        let record = mj_paifu::parse(&text, &format!("session-{}", self.seed))?;
+        self.review
+            .start(self.strategy.clone(), record, self.me(), rc)
     }
 
     /// 復盤狀態。
     pub fn review(&self) -> ReviewState {
-        let s = self.shared.lock();
-        match &s.review {
-            None => ReviewState::Idle,
-            Some(ReviewState::Running { .. }) => ReviewState::Running {
-                seconds: s.review_started.map_or(0.0, |t| t.elapsed().as_secs_f64()),
-            },
-            Some(r) => r.clone(),
-        }
+        self.review.state()
     }
 
     /// 對局結束後的完整事件紀錄（mjai 格式，一行一個事件），可存成牌譜檔。
+    /// `start_game` 附上 `mj_meta`（seed、人類的座位、提示策略），讀回來時用。
     pub fn mjai_log(&self) -> Option<String> {
         let s = self.shared.lock();
         s.game_over.as_ref()?;
-        let lines: Vec<String> = mj_paifu::mjai::events_to_mjai(&s.log, None, &self.names)
-            .iter()
-            .map(|v| v.to_string())
-            .collect();
+        let mut events = mj_paifu::mjai::events_to_mjai(&s.log, None, &self.names);
+        with_meta(
+            &mut events,
+            &LogMeta {
+                seed: Some(self.seed),
+                seat: Some(self.me()),
+                strategy: Some(self.config.strategy.clone()),
+            },
+        );
+        let lines: Vec<String> = events.iter().map(|v| v.to_string()).collect();
         Some(lines.join("\n") + "\n")
     }
 
