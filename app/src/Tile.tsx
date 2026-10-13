@@ -1,6 +1,26 @@
 // 一張牌。牌面圖疊在牌底（front.svg）上；牌背用 CSS 畫。
+// 滑鼠指向一張明牌時，畫面上同種的牌（赤五視為 5）都會標示（`HoverProvider` 包住的範圍）。
 
-import { useState } from "react";
+import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
+
+/** 牌種：赤五視為普通的 5。 */
+export function kindOf(pai: string): string {
+  return pai[0] === "0" ? `5${pai[1]}` : pai;
+}
+
+interface HoverState {
+  hovered: string | null;
+  setHovered: (kind: string | null) => void;
+}
+
+const HoverContext = createContext<HoverState>({ hovered: null, setHovered: () => {} });
+
+/** 同種牌標示的範圍。 */
+export function HoverProvider({ children }: { children: ReactNode }) {
+  const [hovered, setHovered] = useState<string | null>(null);
+  const value = useMemo(() => ({ hovered, setHovered }), [hovered]);
+  return <HoverContext.Provider value={value}>{children}</HoverContext.Provider>;
+}
 
 interface Props {
   pai?: string | null;
@@ -24,14 +44,17 @@ export function Tile({ pai, back, sideways, dim, mark, onClick, title, className
   // 以免空白的牌面被誤認成白。
   const [failed, setFailed] = useState<{ pai: string; tries: number } | null>(null);
   const tries = failed && failed.pai === pai ? failed.tries : 0;
+  const { hovered, setHovered } = useContext(HoverContext);
+  const face = back || !pai ? null : kindOf(pai);
   const classes = ["tile"];
+  if (face && face === hovered) classes.push("mark-same");
   if (sideways) classes.push("sideways");
   if (dim) classes.push("dim");
   if (mark) classes.push(`mark-${mark}`);
   if (onClick) classes.push("clickable");
   if (className) classes.push(className);
   if (back || !pai) classes.push("back");
-  const face = back || !pai ? null : (
+  const image = !face || !pai ? null : (
     <>
       <img className="base" src={`${base}front.svg`} alt="" draggable={false} />
       {tries < 2 ? (
@@ -48,8 +71,14 @@ export function Tile({ pai, back, sideways, dim, mark, onClick, title, className
     </>
   );
   return (
-    <span className={classes.join(" ")} onClick={onClick} title={title ?? pai ?? undefined}>
-      <span className="tile-inner">{face}</span>
+    <span
+      className={classes.join(" ")}
+      onClick={onClick}
+      onMouseEnter={face ? () => setHovered(face) : undefined}
+      onMouseLeave={face ? () => setHovered(null) : undefined}
+      title={title ?? pai ?? undefined}
+    >
+      <span className="tile-inner">{image}</span>
     </span>
   );
 }

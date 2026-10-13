@@ -19,6 +19,11 @@ fn play_out(s: &Session) -> usize {
         }
         if let Some(ask) = u.ask {
             asks += 1;
+            // 立直後只能摸切時自動打出，不會詢問。
+            assert!(
+                !(ask.actions.len() == 1 && ask.actions[0].tsumogiri),
+                "只能摸切時不應詢問"
+            );
             let hint = ask.hint.expect("每次詢問都有提示");
             let i = hint.action.expect("提示的動作是合法動作之一");
             // 過期的詢問編號會被拒絕。
@@ -30,6 +35,7 @@ fn play_out(s: &Session) -> usize {
 
 #[test]
 fn plays_a_full_game_with_hints_and_reviews_it() {
+    let mut total_auto = 0;
     for seat in [0, 2] {
         let s = Session::start(SessionConfig {
             seed: Some(11 + u64::from(seat)),
@@ -42,6 +48,18 @@ fn plays_a_full_game_with_hints_and_reviews_it() {
         assert!(frames > 100);
         let all = s.poll(0, Duration::ZERO);
         assert_eq!(all.frames.len(), frames);
+        // 人類立直之後的摸切都是自動的（照提示打，策略常常立直）。
+        let me = all.frames[0].table.me;
+        let declared = all.frames.iter().any(|f| {
+            matches!(f.event, mj_app::EventView::Discard { seat, riichi: true, .. } if seat == me)
+        });
+        let auto = all.frames.iter().filter(|f| f.auto).count();
+        assert_eq!(declared, auto > 0, "立直 {declared}、自動摸切 {auto} 次");
+        total_auto += auto;
+        assert!(all.frames.iter().filter(|f| f.auto).all(|f| matches!(
+            f.event,
+            mj_app::EventView::Discard { seat, tsumogiri: true, .. } if seat == me
+        )));
         let last = &all.frames.last().unwrap().table;
         assert_eq!(last.scores.iter().sum::<i32>(), 100_000);
         assert!(s.mjai_log().unwrap().lines().count() > 100);
@@ -66,6 +84,7 @@ fn plays_a_full_game_with_hints_and_reviews_it() {
             r => panic!("復盤失敗：{r:?}"),
         }
     }
+    assert!(total_auto > 0, "兩場中至少有一次立直後的自動摸切");
 }
 
 #[test]

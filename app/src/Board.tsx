@@ -1,5 +1,6 @@
 // 牌桌：中央的局況、四家的牌河、對手的手牌與副露。自己的手牌畫在牌桌下方（見 Hand）。
-// 每一家畫成「坐在下方」的樣子，再以牌桌中心旋轉到自己的位置（下家在右、對家在上、上家在左）。
+// 牌河與手牌畫成「坐在下方」的樣子，再以牌桌中心旋轉到該家的位置（下家在右、對家在上、上家在左）；
+// 文字（點數、風位、名稱）放在不旋轉的圖層，對自己而言都是正的。
 
 import { Tile } from "./Tile";
 import type { MeldView, RiverTile, Seat, SeatView, TableView } from "./types";
@@ -124,17 +125,10 @@ export function Board({ table, names }: BoardProps) {
         const last = table.last_discard && table.last_discard[0] === s ? table.last_discard[1] : null;
         return (
           <div key={s} className={`layer rel-${rel}`} style={{ transform: `rotate(${-90 * rel}deg)` }}>
-            <div className={`seat-label ${table.turn === s ? "turn" : ""}`}>
-              <span className="wind">{WINDS[seat.wind]}</span>
-              <span className="score">{table.scores[s]}</span>
-            </div>
             {seat.riichi && <span className="riichi-stick" title="立直" />}
             <River river={seat.river} last={last} />
             {rel !== 0 && (
               <div className="opp-area">
-                <span className="name" title={names[s]}>
-                  {shortName(names[s])}
-                </span>
                 <OpponentHand seat={seat} />
                 <div className="melds">
                   {seat.melds.map((m, i) => (
@@ -147,22 +141,47 @@ export function Board({ table, names }: BoardProps) {
         );
       })}
       <div className="center">
-        <div className="round">{table.round.split(" ")[0]}</div>
-        <div className="sticks">
-          <span title="本場">{table.honba} 本場</span>
-          <span title="供託">供託 {table.riichi_sticks}</span>
+        <div className="center-info">
+          <div className="round">{table.round.split(" ")[0]}</div>
+          <div className="sticks">
+            <span title="本場">{table.honba} 本場</span>
+            <span title="供託">供託 {table.riichi_sticks}</span>
+          </div>
+          <div className="wall">餘 {table.wall_left}</div>
+          <div className="dora">
+            {Array.from({ length: 5 }, (_, i) =>
+              i < table.dora_indicators.length ? (
+                <Tile key={i} pai={table.dora_indicators[i]} />
+              ) : (
+                <Tile key={i} back />
+              ),
+            )}
+          </div>
         </div>
-        <div className="wall">餘 {table.wall_left}</div>
-        <div className="dora">
-          {Array.from({ length: 5 }, (_, i) =>
-            i < table.dora_indicators.length ? (
-              <Tile key={i} pai={table.dora_indicators[i]} />
-            ) : (
-              <Tile key={i} back />
-            ),
-          )}
-        </div>
+        {table.seats.map((seat, s) => {
+          const rel = relative(me, s);
+          return (
+            <div
+              key={s}
+              className={`seat-score rel-${rel} ${table.turn === s ? "turn" : ""} ${seat.riichi ? "riichi" : ""}`}
+              title={`${REL_NAMES[rel]}：${names[s]}`}
+            >
+              <span className="wind">{WINDS[seat.wind]}</span>
+              <span className="score">{table.scores[s]}</span>
+            </div>
+          );
+        })}
       </div>
+      {table.seats.map((_, s) => {
+        const rel = relative(me, s);
+        return (
+          rel !== 0 && (
+            <div key={s} className={`name-tag rel-${rel}`} title={names[s]}>
+              <span className="who">{REL_NAMES[rel]}</span> {shortName(names[s])}
+            </div>
+          )
+        );
+      })}
     </div>
   );
 }

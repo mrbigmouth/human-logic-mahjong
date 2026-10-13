@@ -82,6 +82,8 @@ export type EventView =
 export interface Frame {
   event: EventView;
   table: TableView;
+  /** 自動代打的動作（立直後只能摸切時） */
+  auto?: boolean;
 }
 
 export type ActionType =

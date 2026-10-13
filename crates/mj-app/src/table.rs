@@ -13,6 +13,9 @@ use serde::Serialize;
 pub struct Frame {
     pub event: EventView,
     pub table: TableView,
+    /// 這一幀是自動代打的動作（立直後只能摸切時，不必詢問人類）
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub auto: bool,
 }
 
 /// 人類視角的牌桌。
@@ -618,6 +621,7 @@ impl TableBuilder {
         Frame {
             event,
             table: self.t.clone(),
+            auto: false,
         }
     }
 }

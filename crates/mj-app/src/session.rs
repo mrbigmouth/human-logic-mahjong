@@ -271,6 +271,8 @@ struct HumanSeat {
     hint: Box<dyn StrategyPlayer>,
     /// session 已被丟棄：之後自動打完（摸切或跳過）
     abandoned: bool,
+    /// 剛自動摸切：下一個自己的打牌幀標記為自動
+    auto_pending: bool,
 }
 
 impl HumanSeat {
@@ -368,7 +370,11 @@ fn auto_action(legal: &[Action]) -> Action {
 impl Player for HumanSeat {
     fn on_event(&mut self, me: Seat, event: &Event) {
         self.hint.on_event(me, event);
-        let frame = self.builder.apply(event);
+        let mut frame = self.builder.apply(event);
+        if self.auto_pending && matches!(event, Event::Discard { seat, .. } if *seat == me) {
+            frame.auto = true;
+            self.auto_pending = false;
+        }
         self.shared.update(|s| s.frames.push(frame));
     }
 
@@ -379,6 +385,18 @@ impl Player for HumanSeat {
         let hint = self.hint(view, legal);
         if self.abandoned {
             return auto_action(legal);
+        }
+        // 立直後只能摸切（不能自摸、不能暗槓）：自動打出，不詢問。
+        // 詢問編號照樣遞增，維持「編號 − 1 = 第幾次詢問（act_index）」的對應（復盤用）。
+        if let [
+            a @ Action::Discard {
+                tsumogiri: true, ..
+            },
+        ] = legal
+        {
+            self.auto_pending = true;
+            self.shared.update(|s| s.asks += 1);
+            return a.clone();
         }
         self.shared.update(|s| {
             s.asks += 1;
@@ -470,6 +488,7 @@ impl Session {
                     builder: TableBuilder::new(me),
                     hint: strategy.player(true, None),
                     abandoned: false,
+                    auto_pending: false,
                 }));
             } else {
                 players.push(make_ai(

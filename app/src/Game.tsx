@@ -1,8 +1,9 @@
 // 對局畫面：向核心長輪詢新的事件幀，依序播放（AI 的動作有間隔），輪到自己時顯示操作與提示。
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { call } from "./api";
-import { Board, Meld, REL_NAMES, relative, shortName } from "./Board";
+import { Board, Meld, REL_NAMES, WINDS, relative, shortName } from "./Board";
+import { play, type SoundKind } from "./sounds";
 import { Tile, TileText, Tiles } from "./Tile";
 import type { ActionView, Ask, EventView, Frame, GameOver, NewGame, TableView, Update } from "./types";
 
@@ -41,6 +42,12 @@ export function Game({ game, onReview, onQuit }: Props) {
   const [riichiMode, setRiichiMode] = useState(false);
   const [showHint, setShowHint] = useState(() => localStorage.getItem("hint") !== "off");
   const [speed, setSpeed] = useState(() => Number(localStorage.getItem("speed") ?? 500));
+  const [volume, setVolume] = useState(() => Number(localStorage.getItem("volume") ?? 0.6));
+  const [panelOpen, setPanelOpen] = useState(() => localStorage.getItem("panel") !== "closed");
+  const [tab, setTab] = useState<Tab>(() => (localStorage.getItem("tab") as Tab | null) ?? "hint");
+  const area = useRef<HTMLDivElement>(null);
+  const handArea = useRef<HTMLDivElement>(null);
+  const boardSize = useBoardSize(area, handArea, frames.length > 0);
   const askFrames = useRef(new Map<number, number>());
   const next = useRef(0);
   const waiting = useRef(false);
@@ -49,10 +56,13 @@ export function Game({ game, onReview, onQuit }: Props) {
     try {
       localStorage.setItem("hint", showHint ? "on" : "off");
       localStorage.setItem("speed", String(speed));
+      localStorage.setItem("volume", String(volume));
+      localStorage.setItem("panel", panelOpen ? "open" : "closed");
+      localStorage.setItem("tab", tab);
     } catch {
       // 無法儲存設定時忽略
     }
-  }, [showHint, speed]);
+  }, [showHint, speed, volume, panelOpen, tab]);
 
   // 長輪詢：有詢問或對局結束時暫停，回答後再繼續。
   const poll = useMemo(
@@ -95,15 +105,20 @@ export function Game({ game, onReview, onQuit }: Props) {
   useEffect(() => {
     if (hold !== null || pos >= frames.length - 1) return;
     const nextFrame = frames[pos + 1];
-    const t = setTimeout(() => {
-      setPos(pos + 1);
-      const type = nextFrame.event.type;
-      if ((type === "win" || type === "ryuukyoku") && !released.has(pos + 1)) {
-        setHold(pos + 1);
-      }
-    }, delayFor(nextFrame.event, game.seat, speed));
+    const t = setTimeout(
+      () => {
+        setPos(pos + 1);
+        const sound = soundFor(nextFrame.event);
+        if (sound) play(sound, volume);
+        const type = nextFrame.event.type;
+        if ((type === "win" || type === "ryuukyoku") && !released.has(pos + 1)) {
+          setHold(pos + 1);
+        }
+      },
+      delayFor(nextFrame.event, game.seat, speed),
+    );
     return () => clearTimeout(t);
-  }, [pos, frames, hold, speed, game.seat, released]);
+  }, [pos, frames, hold, speed, game.seat, released, volume]);
 
   const frame = frames[Math.min(pos, frames.length - 1)];
   // 詢問要等播放追上（看到的幀數 ≥ 詢問時的幀數）才顯示。
@@ -133,49 +148,111 @@ export function Game({ game, onReview, onQuit }: Props) {
   const events = frames.slice(Math.max(0, pos - 40), pos + 1).reverse();
   const hint = activeAsk && showHint ? activeAsk.hint : null;
 
+  const tabs: [Tab, string, boolean][] = [
+    ["hint", "提示", hint !== null],
+    ["efficiency", "牌效", hint !== null && hint.efficiency.length > 0],
+    ["log", "紀錄", false],
+    ["info", "對局資訊", false],
+  ];
+
   return (
-    <div className="game">
-      <div className="main">
+    <div className={`game ${panelOpen ? "panel-open" : ""}`}>
+      <div className="table-area" ref={area} style={{ "--B": `${boardSize}px` } as CSSProperties}>
         <Board table={table} names={game.names} />
-        <Hand
-          table={table}
-          ask={activeAsk}
-          riichiMode={riichiMode}
-          setRiichiMode={setRiichiMode}
-          hint={hint ? hint.action : null}
-          onAct={act}
-        />
+        <div className="hand-wrap" ref={handArea}>
+          <Hand
+            table={table}
+            ask={activeAsk}
+            riichiMode={riichiMode}
+            setRiichiMode={setRiichiMode}
+            hint={hint ? hint.action : null}
+            onAct={act}
+          />
+        </div>
       </div>
-      <aside className="side">
-        <div className="controls">
-          <label>
-            <input type="checkbox" checked={showHint} onChange={(e) => setShowHint(e.target.checked)} /> 即時提示
-          </label>
-          <label title="AI 打牌的間隔">
-            速度
-            <input
-              type="range"
-              min={0}
-              max={1200}
-              step={100}
-              value={1200 - speed}
-              onChange={(e) => setSpeed(1200 - Number(e.target.value))}
-            />
-          </label>
-          <button onClick={() => (over || window.confirm("放棄這場對局？")) && onQuit()}>結束</button>
+      <section className="bottom-panel">
+        <div className="panel-bar">
+          <button className="toggle" onClick={() => setPanelOpen(!panelOpen)} title={panelOpen ? "收起" : "展開"}>
+            {panelOpen ? "▾" : "▴"}
+          </button>
+          <div className="tabs">
+            {tabs.map(([id, label, dot]) => (
+              <button
+                key={id}
+                className={`tab ${tab === id && panelOpen ? "on" : ""}`}
+                onClick={() => {
+                  setTab(id);
+                  setPanelOpen(true);
+                }}
+              >
+                {label}
+                {dot && <span className="tab-dot" />}
+              </button>
+            ))}
+          </div>
+          <div className="controls">
+            <label>
+              <input type="checkbox" checked={showHint} onChange={(e) => setShowHint(e.target.checked)} /> 即時提示
+            </label>
+            <label title="AI 打牌的間隔">
+              速度
+              <input
+                type="range"
+                min={0}
+                max={1200}
+                step={100}
+                value={1200 - speed}
+                onChange={(e) => setSpeed(1200 - Number(e.target.value))}
+              />
+            </label>
+            <label title="立直、鳴牌、和牌的音效（最左 = 關閉）">
+              音效
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.1}
+                value={volume}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  setVolume(v);
+                  play("call", v);
+                }}
+              />
+            </label>
+            <button onClick={() => (over || window.confirm("放棄這場對局？")) && onQuit()}>結束</button>
+          </div>
         </div>
-        {hint && <HintPanel hint={hint} />}
-        {activeAsk && !showHint && <div className="panel muted">輪到你了</div>}
-        <div className="panel log">
-          <h3>紀錄</h3>
-          {events.map((f, i) => (
-            <div key={i} className={`log-line ev-${f.event.type}`}>
-              <TileText text={f.event.text} />
-            </div>
-          ))}
-        </div>
-        <div className="panel seed">seed {game.seed}</div>
-      </aside>
+        {panelOpen && (
+          <div className="panel-body">
+            {tab === "hint" &&
+              (hint ? (
+                <HintPanel hint={hint} />
+              ) : (
+                <div className="muted">
+                  {activeAsk ? "輪到你了（即時提示已關閉）" : "輪到你時，這裡會顯示策略的選擇與理由。"}
+                </div>
+              ))}
+            {tab === "efficiency" &&
+              (hint && hint.efficiency.length > 0 ? (
+                <EfficiencyTable hint={hint} />
+              ) : (
+                <div className="muted">輪到你打牌時，這裡會列出每張牌打出後的向聽數與進張。</div>
+              ))}
+            {tab === "log" && (
+              <div className="log">
+                {events.map((f, i) => (
+                  <div key={i} className={`log-line ev-${f.event.type}`}>
+                    <TileText text={f.event.text} />
+                    {f.auto && <span className="muted">（自動）</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+            {tab === "info" && <GameInfo game={game} table={table} />}
+          </div>
+        )}
+      </section>
       {error && (
         <div className="modal">
           <div className="dialog">
@@ -207,6 +284,80 @@ export function Game({ game, onReview, onQuit }: Props) {
   );
 }
 
+type Tab = "hint" | "efficiency" | "log" | "info";
+
+/** 播放到這一幀時的音效。 */
+function soundFor(ev: EventView): SoundKind | null {
+  switch (ev.type) {
+    case "discard":
+      return ev.riichi ? "riichi" : null;
+    case "call":
+      return "call";
+    case "win":
+      return "win";
+    default:
+      return null;
+  }
+}
+
+/**
+ * 牌桌邊長（px）：牌桌區域扣掉自己手牌區的實際高度後，取寬高中較小的。
+ * 自己的手牌疊在牌桌下緣的空白帶上（[`HAND_OVERLAP`] × 邊長，那裡原本只有自己的牌河以下的空位）。
+ * 手牌的大小又依牌桌邊長而定，所以兩者都監看大小變化，幾次之內就會穩定。
+ */
+function useBoardSize(
+  area: RefObject<HTMLDivElement | null>,
+  hand: RefObject<HTMLDivElement | null>,
+  /** 牌桌已經畫出來（之前是「準備中」畫面，還沒有可以量的元素） */
+  ready: boolean,
+): number {
+  const [size, setSize] = useState(600);
+  useEffect(() => {
+    const el = area.current;
+    const h = hand.current;
+    if (!el || !h) return;
+    const update = () => {
+      const style = getComputedStyle(el);
+      const pad = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+      const gap = parseFloat(style.rowGap) || 0;
+      const w = el.clientWidth - 16;
+      const free = (el.clientHeight - pad - gap - h.offsetHeight) / (1 - HAND_OVERLAP);
+      const next = Math.max(280, Math.floor(Math.min(w, free)));
+      setSize((old) => (Math.abs(old - next) > 1 ? next : old));
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    ro.observe(h);
+    return () => ro.disconnect();
+  }, [area, hand, ready]);
+  return size;
+}
+
+/** 自己的手牌疊進牌桌下緣的比例（與 styles.css 的 `.hand-wrap` 一致）。 */
+const HAND_OVERLAP = 0.09;
+
+/** 對局資訊：四家的參賽者、seed。 */
+function GameInfo({ game, table }: { game: NewGame; table: TableView }) {
+  return (
+    <div className="game-info">
+      <table>
+        <tbody>
+          {game.names.map((n, s) => (
+            <tr key={s} className={s === table.me ? "me" : ""}>
+              <td>{REL_NAMES[relative(table.me, s)]}</td>
+              <td>{WINDS[table.seats[s].wind]}</td>
+              <td className="score">{table.scores[s]}</td>
+              <td>{n}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="muted">seed {game.seed}（設定畫面輸入同一個 seed 可以重打同樣的牌山）</div>
+    </div>
+  );
+}
+
 interface HandProps {
   table: TableView;
   ask: Ask | null;
@@ -225,9 +376,10 @@ export function Hand({ table, ask, riichiMode, setRiichiMode, hint, onAct }: Han
   const find = (pai: string, tsumogiri: boolean) =>
     actions.find((a) => a.type === discardType && a.pai === pai && a.tsumogiri === tsumogiri);
   const hintAction = hint !== null ? actions[hint] : undefined;
+  // 提示是立直時，要先按「立直」（按鈕上有提示點），牌才會標示；避免直接點牌而變成默聽。
   const isHint = (pai: string, tsumogiri: boolean) =>
     hintAction !== undefined &&
-    (hintAction.type === "discard" || hintAction.type === "riichi") &&
+    hintAction.type === discardType &&
     hintAction.pai === pai &&
     hintAction.tsumogiri === tsumogiri;
   const buttons = actions.filter((a) => a.type !== "discard" && a.type !== "riichi");
@@ -246,20 +398,6 @@ export function Hand({ table, ask, riichiMode, setRiichiMode, hint, onAct }: Han
   };
   return (
     <div className="my-area">
-      <div className="actions">
-        {canRiichi && (
-          <button className={`act riichi ${riichiMode ? "on" : ""}`} onClick={() => setRiichiMode(!riichiMode)}>
-            {riichiMode ? "取消立直" : "立直"}
-            {hintAction?.type === "riichi" && <span className="hint-dot" />}
-          </button>
-        )}
-        {buttons.map((a) => (
-          <button key={a.index} className={`act ${a.type} ${hint === a.index ? "hinted" : ""}`} onClick={() => onAct(a)}>
-            <TileText text={a.label} />
-          </button>
-        ))}
-        {riichiMode && <span className="note">選擇立直要打的牌</span>}
-      </div>
       <div className={`my-hand ${me.revealed ? "revealed" : ""}`}>
         <span className="hand-tiles">{me.hand.map((p, i) => tile(p, false, i))}</span>
         {me.drawn && <span className="drawn">{tile(me.drawn, true, "drawn")}</span>}
@@ -269,52 +407,81 @@ export function Hand({ table, ask, riichiMode, setRiichiMode, hint, onAct }: Han
           ))}
         </span>
       </div>
+      <div className="actions">
+        {canRiichi && (
+          <button className={`act riichi ${riichiMode ? "on" : ""}`} onClick={() => setRiichiMode(!riichiMode)}>
+            {riichiMode ? "取消立直" : "立直"}
+            {hintAction?.type === "riichi" && <span className="hint-dot" />}
+          </button>
+        )}
+        {buttons.map((a) => (
+          <button
+            key={a.index}
+            className={`act ${a.type} ${hint === a.index ? "hinted" : ""}`}
+            onClick={() => onAct(a)}
+          >
+            <TileText text={a.label} />
+          </button>
+        ))}
+        {riichiMode && <span className="note">選擇立直要打的牌</span>}
+      </div>
     </div>
   );
 }
 
 function HintPanel({ hint }: { hint: NonNullable<Ask["hint"]> }) {
   return (
-    <div className="panel hint">
+    <div className="hint">
       <h3>
-        提示：<TileText text={hint.label} />
+        提示：
+        <TileText text={hint.label} />
       </h3>
-      {hint.decisions.map((d, i) => (
-        <div key={i} className="decision">
-          <div className="kind">
-            【{d.kind}】<TileText text={d.options[d.chosen] ?? ""} />
-          </div>
-          <ul>
-            {d.notes.map((n, j) => (
-              <li key={j}>
-                <TileText text={n} />
-              </li>
-            ))}
-          </ul>
-        </div>
-      ))}
-      {hint.efficiency.length > 0 && (
-        <details className="efficiency">
-          <summary>牌效參考</summary>
-          <table>
-            <tbody>
-              {hint.efficiency.map((e) => (
-                <tr key={e.pai}>
-                  <td>
-                    打 <Tile pai={e.pai} />
-                  </td>
-                  <td>{e.shanten === 0 ? "聽牌" : `${e.shanten} 向聽`}</td>
-                  <td>{Math.round(e.ukeire)} 張</td>
-                  <td>
-                    <Tiles className="inline" tiles={e.tiles} />
-                  </td>
-                </tr>
+      <div className="decisions-grid">
+        {hint.decisions.map((d, i) => (
+          <div key={i} className="decision">
+            <div className="kind">
+              【{d.kind}】<TileText text={d.options[d.chosen] ?? ""} />
+            </div>
+            <ul>
+              {d.notes.map((n, j) => (
+                <li key={j}>
+                  <TileText text={n} />
+                </li>
               ))}
-            </tbody>
-          </table>
-        </details>
-      )}
+            </ul>
+          </div>
+        ))}
+      </div>
     </div>
+  );
+}
+
+function EfficiencyTable({ hint }: { hint: NonNullable<Ask["hint"]> }): ReactNode {
+  return (
+    <table className="efficiency">
+      <thead>
+        <tr>
+          <th>打</th>
+          <th>向聽</th>
+          <th>進張</th>
+          <th>有效牌</th>
+        </tr>
+      </thead>
+      <tbody>
+        {hint.efficiency.map((e) => (
+          <tr key={e.pai}>
+            <td>
+              <Tile pai={e.pai} />
+            </td>
+            <td>{e.shanten === 0 ? "聽牌" : `${e.shanten} 向聽`}</td>
+            <td>{Math.round(e.ukeire)} 張</td>
+            <td>
+              <Tiles className="inline" tiles={e.tiles} />
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
