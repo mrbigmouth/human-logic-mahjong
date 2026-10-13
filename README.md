@@ -19,7 +19,7 @@
 | [docs/03-strategy-model.md](docs/03-strategy-model.md) | 策略模型：決策函式、對局記憶、預測與決策的兩種評分 |
 | [crates/mj-strategy/TOOLS.md](crates/mj-strategy/TOOLS.md) | **策略編輯者工具手冊**：目錄寫法、決策函式、全部工具 |
 | [crates/mj-strategy/DATA.md](crates/mj-strategy/DATA.md) | **策略編輯者資料結構說明**：`Ctx`、`PlayerView`、牌河、副露、`Event`、`Claim`、計分 |
-| [docs/04-milestones.md](docs/04-milestones.md) | 里程碑 M0–M9 與驗收條件 |
+| [docs/04-milestones.md](docs/04-milestones.md) | 里程碑 M0–M10 與驗收條件 |
 | [docs/05-glossary.md](docs/05-glossary.md) | 術語對照表：程式中的日語拼音名稱、牌的記法（m 萬、p 筒、s 索、z 字）、役種中文名 |
 
 ## 快速開始
@@ -42,6 +42,9 @@ S=tenhou-normal-4p-hanchan/hand-reading
 ./target/release/mj predict-eval --strategy $S --games 300                 # 預測準確度
 ./target/release/mj evaluate --strategy $S --games 20                      # 決策品質（反事實模擬）
 ./target/release/mj simulate $S greedy --blocks 1000                        # duplicate 對戰比較
+./target/release/mj simulate $S "$S@deceive.meisai=0" --field $S --blocks 5000   # 場地對戰：各自和三家同一對手同桌
+H="$S@deceive.tedashi=0;deceive.meisai=0"
+./target/release/mj predict-eval --seats "$S,$H,$H,$H" --games 1000         # 四家不同策略，依被預測者看讀牌準不準
 
 # 天鳳牌譜：下載鳳凰卓牌譜（只保留最近幾天）→ 用引擎重播並比對點數 → 對真人對局評估預測
 tools/fetch-tenhou.sh 2026100700 2026100701 -n 20

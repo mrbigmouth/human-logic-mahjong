@@ -51,7 +51,7 @@ src/strategy-list/
 
 框架依人類思考順序呼叫：
 
-- **自己的回合**：九種九牌 → 和牌與否 → 開槓 → 何切 → 立直與否
+- **自己的回合**：九種九牌 → 和牌與否 → 開槓 → 何切 → 立直與否 → 手切摸切
 - **他家打牌時**：和牌與否 → 鳴牌
 
 | 決策 | 函式簽名 | 選項從哪裡來 | 沒登記時 |
@@ -62,15 +62,17 @@ src/strategy-list/
 | 何切 | `fn(&Ctx, &mut Memory) -> Pai` | `ctx.discard_candidates()` | **必須登記** |
 | 立直與否 | `fn(&Ctx, &mut Memory) -> bool` | `ctx.riichi_discard()` = 已決定要打的牌 | 立直 |
 | 鳴牌 | `fn(&Ctx, &mut Memory) -> CallChoice` | `ctx.call_options()`（含 `CallChoice::Pass`） | 不鳴 |
+| 手切摸切 | `fn(&Ctx, &mut Memory) -> bool` | 打的牌和剛摸到的牌同種時才問；`ctx.tedashi_pai()`、`ctx.declaring_riichi()`；true = 從手中打出（手切） | 摸切 |
 
 - 回傳值必須是選項之一；回傳不在選項中的值時，框架改用預設選項並在紀錄中標記 `invalid`。
 - 只有一個選項時（例如立直後只能摸切）不會呼叫決策函式。
 
-另外兩種登記（不是決策）：
+另外三種登記（不是決策）：
 
 | 登記 | 函式簽名 | 何時呼叫 |
 |---|---|---|
 | `book.observe(f)` | `fn(Seat, &Event, &mut Memory)` | 每個事件；用來更新對局記憶 |
+| `book.think_each_turn(f)` | `fn(&Ctx, &mut Memory)` | 每次輪到自己、在常駐預測與所有決策之前，**一定會執行**；把當下的判斷記進記憶（例如「我現在估計各家聽牌的機率」，局末公開時再與真相對照）。寫的理由與預測不會被記錄 |
 | `book.predict_each_turn(f)` | `fn(&Ctx, &mut Memory)` | 每次輪到自己、在所有決策之前；只做預測（`ctx.claim`），不影響動作。用於「決策不一定用到、但希望持續被評估」的預測，只在評估（有記錄）時執行 |
 
 ## 3. `Ctx` 與所有資料結構
@@ -135,6 +137,7 @@ src/strategy-list/
 | `meld_dora(view, seat) -> u8` | 副露中看得到的寶牌張數（含赤五） |
 | `has_yakuhai_meld(view, seat)` | 副露中有沒有對他而言是役牌的刻子 |
 | `meld_suits(view, seat) -> u8` | 副露用到的數牌花色（位元：萬 1、筒 2、索 4） |
+| `view_after_discard(view, pai, tsumogiri, riichi) -> PlayerView` | 自己打出這張（手切／摸切、是否立直）之後的牌桌；搭配 `ctx.imagine(&v)` 看「別人眼中的我」 |
 
 ### `tools::yaku_path` 役的路線
 | 函式 | 說明 |

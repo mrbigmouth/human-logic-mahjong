@@ -2,6 +2,8 @@
 //!
 //! 思考順序：
 //! 1. 沒有人對我有威脅 → 照牌效：向聽數最低 → 進張最多 → 保留寶牌 → 先打字牌、老頭牌。
+//!    打了就聽牌時再看迷彩：聽牌張剩餘張數差不多的打法中，選聽牌張在別人眼中較安全的
+//!    （用自己的讀牌模型看自己，見 `utils/image.rs`）。
 //! 2. 有威脅（有人立直，或沒立直的人看起來已聽牌）→ 押引：每張牌算
 //!
 //!    「這張的價值」＝ 打了之後我和牌的機率 × 我的手牌價值 − 放銃機率 × 對手的打點
@@ -13,7 +15,7 @@
 
 use super::super::memory::Memory;
 use super::super::utils::predict::win;
-use super::super::utils::{defense, efficiency, value};
+use super::super::utils::{defense, efficiency, image, value};
 use crate::prelude::*;
 
 /// 我和牌時，除了手牌的點數，還能阻止每一家威脅和牌（他的和牌本來可能自摸、讓我也付點數），
@@ -38,6 +40,31 @@ pub const WIN_WEIGHT: Param = Param::new(
     "押引時和牌期望值的權重",
 );
 
+/// 是否做迷彩（0 = 只看牌效，用來和不做的版本比較）。
+pub const MEISAI: Param = Param::new(
+    "deceive.meisai",
+    1.0,
+    0.0,
+    1.0,
+    "聽牌時的迷彩（1 = 開、0 = 關）",
+);
+/// 迷彩的候選：聽牌張剩餘張數至少是最多者的這個比例。
+pub const MEISAI_MIN_UKEIRE: Param = Param::new(
+    "deceive.meisai_min_ukeire",
+    0.75,
+    0.3,
+    1.0,
+    "迷彩時聽牌張至少要有最多者的幾成",
+);
+/// 迷彩的條件：聽牌張看起來的危險度要降到牌效最好者的這個比例以下才換。
+pub const MEISAI_DANGER_RATIO: Param = Param::new(
+    "deceive.meisai_danger_ratio",
+    0.8,
+    0.1,
+    1.0,
+    "迷彩時聽牌張看起來的危險度要低於牌效最好者的幾成才換",
+);
+
 /// 回傳要打的牌（必須是 `ctx.discard_candidates()` 之一）。
 pub fn decide(ctx: &Ctx, mem: &mut Memory) -> Pai {
     let candidates = ctx.discard_candidates();
@@ -51,6 +78,9 @@ pub fn decide(ctx: &Ctx, mem: &mut Memory) -> Pai {
 
     if best_eval.shanten == 0 {
         ctx.note(format!("打 {best} 聽牌，聽牌張剩 {} 張", best_eval.ukeire));
+        if let Some(pai) = meisai(ctx, mem, &ranked) {
+            return pai;
+        }
     } else {
         ctx.note(format!(
             "打 {best}：{} 向聽、進張 {} 張（牌效最好）",
@@ -68,6 +98,45 @@ pub fn decide(ctx: &Ctx, mem: &mut Memory) -> Pai {
         }
     }
     best
+}
+
+/// 迷彩：打了就聽牌、聽牌張剩餘張數差不多、和了的點數不比較低的打法中，選聽牌張在別人眼中明顯較安全的。
+/// 門前時假設會立直（立直者的聽牌張讀法：筋、宣言牌的筋……），副露時以未立直者的讀法。
+/// 點數的條件來自對戰：看起來安全的聽牌（例如字牌單騎）常常比較便宜，不限制時面對不讀牌的對手會變弱。
+fn meisai(ctx: &Ctx, mem: &Memory, ranked: &[(Pai, AfterEval)]) -> Option<Pai> {
+    if ctx.param(&MEISAI) < 0.5 {
+        return None;
+    }
+    let (best, best_eval) = ranked[0];
+    let closed = ctx.view.melds[usize::from(ctx.me())]
+        .iter()
+        .all(|m| !m.is_open());
+    let min_ukeire = best_eval.ukeire * ctx.param(&MEISAI_MIN_UKEIRE) as f32;
+    let danger = |pai| image::apparent_wait_danger(ctx, mem, pai, closed);
+    let points = |pai: Pai| {
+        let mut hand = ctx.hand();
+        hand.remove(pai.tile);
+        value::my_value(ctx, &hand, 0, pai)
+    };
+    let best_danger = danger(best)?;
+    let best_points = points(best);
+    let (pai, eval, d) = ranked[1..]
+        .iter()
+        .filter(|(_, e)| e.shanten == 0 && e.ukeire >= min_ukeire && e.ukeire > 0.0)
+        .filter(|&&(p, _)| points(p) >= best_points)
+        .filter_map(|&(p, e)| danger(p).map(|d| (p, e, d)))
+        .min_by(|a, b| a.2.total_cmp(&b.2))?;
+    if d >= best_danger * ctx.param(&MEISAI_DANGER_RATIO) {
+        return None;
+    }
+    ctx.note(format!(
+        "迷彩：改打 {pai}（聽牌張 {} 張，少 {}），聽牌張在別人眼中的危險度 {:.1}% → {:.1}%",
+        eval.ukeire,
+        best_eval.ukeire - eval.ukeire,
+        best_danger * 100.0,
+        d * 100.0
+    ));
+    Some(pai)
 }
 
 /// 一張候選牌的押引評估。

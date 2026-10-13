@@ -12,6 +12,10 @@
   再看筋、片筋、No Chance、One Chance、寶牌與寶牌旁、他捨牌中這門的比例（染手）、最後手切的牌附近、立直宣言牌的筋、巡目；字牌看已見張數與是否為他的役牌。
 - **讀牌：打點**（`utils/predict/hand_value.rs`）：立直者依立直巡目、副露者依副露中的寶牌與碰的組數、門前者依場上看不到的寶牌數。
 - **押引**：有威脅時（立直者，或聽牌機率 ≥ 50% 的沒立直者），每張候選牌算期望值；威脅的份量以聽牌機率計。
+- **印象操作**（M10，`utils/image.rs`）：用自己的讀牌模型看自己（「別人眼中的我」）。
+  - 手切摸切（`decision/tedashi.rs`）：打的牌和剛摸到的牌同種時，聽牌或一向聽選看起來較不像聽牌的打法，離聽牌還遠時選較像聽牌的。
+  - 迷彩（`decision/discard.rs`）：聽牌的打法中，聽牌張數相近、點數不比較低時，選聽牌張在別人眼中較安全的（筋、不在宣言牌附近）。
+  - 反詐騙（`memory.rs`、`predict/tenpai.rs`）：每回合記下對各家的聽牌估計，荒牌流局時與公開的聽牌狀態對照，常藏聽牌的人提高估計、常虛張聲勢的人降低。
 - **立直或默聽、鳴牌、牌效**：架構與 `push-fold` 相同（無役立直、默聽跳滿左右就默聽；有人立直時只有鳴了就聽牌才鳴；進張差不多時保留寶牌）；
   M8 以 duplicate 調整門檻：非役牌的鳴牌除非鳴了就聽牌，否則要 3 張寶牌；默聽門檻 8000 → 9000 點；牌山剩不到 5 張才改默聽。
 
@@ -44,3 +48,6 @@
 | `decision/riichi.rs` | `riichi.dama_points`、`riichi.late_wall`、`riichi.min_waits` |
 | `decision/call.rs` | `call.far_shanten`、`call.min_dora_for_far_call` |
 | `utils/efficiency.rs` | `efficiency.dora_discount` |
+| `decision/tedashi.rs` | `deceive.tedashi`（開關）、`deceive.bluff_shanten` |
+| `decision/discard.rs`（迷彩） | `deceive.meisai`（開關）、`deceive.meisai_min_ukeire`、`deceive.meisai_danger_ratio` |
+| `utils/predict/tenpai.rs`（反詐騙） | `antideceive.calibrate`（開關）、`antideceive.prior` |

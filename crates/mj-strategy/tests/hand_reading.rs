@@ -6,7 +6,9 @@ use mj_rules::riichi::RiichiConfig;
 use mj_strategy::find_strategy;
 use mj_strategy::framework::{Ctx, DecisionKind};
 use mj_strategy::strategy_list::tenhou_normal_4p_hanchan::hand_reading::{
-    memory::Memory,
+    decision,
+    memory::{Memory, Reveals},
+    utils::image,
     utils::predict::{hand_value, tenpai, waits},
 };
 
@@ -189,4 +191,140 @@ fn params_are_collected_and_overridable() {
         .unwrap();
     assert_eq!(tuned.overrides().get(far), 3.0);
     assert_eq!(st.overrides().get(far), far.default);
+}
+
+/// 自己（座位 0）打出 `tiles`（`*` 結尾 = 摸切）。
+fn my_river(v: &mut PlayerView, tiles: &[&str]) {
+    for (i, t) in tiles.iter().enumerate() {
+        v.rivers[0].push(DiscardRecord {
+            pai: p(t.trim_end_matches('*')),
+            tsumogiri: t.ends_with('*'),
+            riichi_declared: false,
+            called: false,
+            seq: (i * 4) as u16,
+        });
+    }
+}
+
+fn hand(v: &mut PlayerView, tiles: &str) {
+    let pais = parse_pais(tiles).unwrap();
+    v.hand = TileCounts::from_tiles(pais.iter().map(|p| p.tile));
+    v.drawn = pais.last().copied();
+    v.hand_pais = pais;
+}
+
+/// 手切摸切：聽牌時選「別人眼中較不像聽牌」的打法，離聽牌還遠時選較像聽牌的。
+#[test]
+fn tedashi_chooses_the_image() {
+    let mut v = view();
+    v.melds[0].push(pon("6z"));
+    // 副露 6z 之後：123m456p 11z 22z ＋摸 2z → 打 2z 聽 1z/2z 對碰。
+    hand(&mut v, "123m456p1122z2z");
+    my_river(&mut v, &["9m", "1p*", "8s*", "7s", "9s*", "3z*"]);
+    let mut mem = Memory::default();
+    let ctx = Ctx::new(&v, DecisionKind::Tedashi).with_tedashi(p("2z"), false);
+    let tsumo = image::apparent_tenpai(&ctx, &mem, p("2z"), true, false);
+    let teda = image::apparent_tenpai(&ctx, &mem, p("2z"), false, false);
+    assert!(teda < tsumo, "手切 {teda:.3} 應比摸切 {tsumo:.3} 不像聽牌");
+    assert!(decision::tedashi::decide(&ctx, &mut mem));
+    let notes = ctx.notes();
+    assert!(notes[0].contains("看起來不像聽牌"), "{notes:?}");
+
+    // 離聽牌還遠：選像聽牌的（摸切）。
+    let mut far = v.clone();
+    hand(&mut far, "159m258p1357s2z2z");
+    let ctx = Ctx::new(&far, DecisionKind::Tedashi).with_tedashi(p("2z"), false);
+    assert!(!decision::tedashi::decide(&ctx, &mut mem));
+    let notes = ctx.notes();
+    assert!(notes[0].contains("像聽牌"), "{notes:?}");
+
+    // 關掉印象操作：一律摸切、不寫理由。
+    let mut off = mj_strategy::framework::ParamSet::default();
+    off.set(decision::tedashi::ENABLED.name, 0.0);
+    let ctx = Ctx::new(&v, DecisionKind::Tedashi)
+        .with_tedashi(p("2z"), false)
+        .with_params(std::sync::Arc::new(off));
+    assert!(!decision::tedashi::decide(&ctx, &mut mem));
+}
+
+/// 迷彩：兩種單騎聽牌張數相同時，聽自己牌河的筋（別人眼中較安全）。
+#[test]
+fn meisai_prefers_a_wait_that_looks_safe() {
+    let mut v = view();
+    // 123m456p789s111z 加 4m、摸 4p：打 4p 單騎 4m（1m、7m 都在牌河 → 4m 是筋），打 4m 單騎 4p。
+    hand(&mut v, "123m456p789s111z4m4p");
+    my_river(&mut v, &["1m", "9p", "7m", "2s"]);
+    let mut mem = Memory::default();
+    let ctx = Ctx::new(&v, DecisionKind::Discard);
+    let d4m = image::apparent_wait_danger(&ctx, &mem, p("4m"), true).unwrap();
+    let d4p = image::apparent_wait_danger(&ctx, &mem, p("4p"), true).unwrap();
+    assert!(
+        d4p < d4m,
+        "聽筋 4m（打 4p）{d4p:.3} 應比聽 4p（打 4m）{d4m:.3} 安全"
+    );
+    let ctx = Ctx::new(&v, DecisionKind::Discard).with_discards(vec![p("4m"), p("4p")]);
+    assert_eq!(decision::discard::decide(&ctx, &mut mem), p("4p"));
+    let notes = ctx.notes();
+    assert!(notes.iter().any(|n| n.contains("迷彩")), "{notes:?}");
+}
+
+/// 反詐騙：流局時常常「看起來沒聽卻聽了」的人，聽牌估計提高；常常「看起來聽了卻沒聽」的人降低。
+#[test]
+fn reveals_calibrate_tenpai_reading() {
+    let mut v = view();
+    v.melds[1].push(pon("6z"));
+    river(&mut v, &["1z", "9m", "1p", "8s", "2m", "5p", "3s"]);
+    let ctx = Ctx::new(&v, DecisionKind::Discard);
+    let base = tenpai::estimate(&ctx, &Memory::default(), 1);
+    let with = |expected: f64, actual: f64| {
+        let mut mem = Memory::default();
+        mem.reveals[1] = Reveals {
+            n: 3,
+            expected,
+            actual,
+        };
+        tenpai::estimate(&ctx, &mem, 1)
+    };
+    assert!(with(0.6, 3.0) > base, "藏聽牌的人應提高");
+    assert!(with(2.4, 0.0) < base, "虛張聲勢的人應降低");
+    assert!((with(1.5, 1.5) - base).abs() < 1e-9, "估計準確時不變");
+}
+
+/// 荒牌流局時，沒立直的各家公開的聽牌狀態與我最後一次的估計記進記憶；立直者與沒估計過的不列入。
+#[test]
+fn exhaustive_draw_records_reveals() {
+    use mj_engine::{DrawReason, Event, HandEnd};
+    use mj_strategy::strategy_list::tenhou_normal_4p_hanchan::hand_reading::memory;
+    let mut mem = Memory::default();
+    let v = view();
+    memory::think(&Ctx::new(&v, DecisionKind::Predict), &mut mem);
+    assert!(mem.tenpai_guess[0].is_none() && mem.tenpai_guess[1].is_some());
+    memory::observe(0, &Event::RiichiAccepted { seat: 3 }, &mut mem);
+    let end = Event::HandEnd {
+        end: HandEnd::Draw {
+            reason: DrawReason::Exhaustive,
+            tenpai: [false, true, false, true],
+            nagashi: vec![],
+        },
+        deltas: [0; 4],
+    };
+    memory::observe(0, &end, &mut mem);
+    assert_eq!(mem.reveals[1].n, 1);
+    assert_eq!(mem.reveals[1].actual, 1.0);
+    assert_eq!(mem.reveals[2].actual, 0.0);
+    assert_eq!(mem.reveals[0].n, 0, "自己不列入");
+    assert_eq!(mem.reveals[3].n, 0, "立直者不列入");
+    // 新的一局：本局的估計清掉，對照紀錄保留。
+    let start = Event::StartKyoku {
+        round_wind: 0,
+        kyoku: 1,
+        honba: 0,
+        riichi_sticks: 0,
+        scores: [25_000; 4],
+        dora_indicator: "1z".parse().unwrap(),
+        hands: Default::default(),
+    };
+    memory::observe(0, &start, &mut mem);
+    assert!(mem.tenpai_guess[1].is_none());
+    assert_eq!(mem.reveals[1].n, 1);
 }

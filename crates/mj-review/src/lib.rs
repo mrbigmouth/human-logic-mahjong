@@ -239,7 +239,7 @@ pub fn review_game(
             else {
                 continue;
             };
-            let riichi_pai = (r.kind == DecisionKind::Riichi)
+            let riichi_pai = matches!(r.kind, DecisionKind::Riichi | DecisionKind::Tedashi)
                 .then(|| strategy_discard(&records, i, point))
                 .flatten();
             match option_of_action(r.kind, &point.legal, &point.chosen, riichi_pai) {
@@ -288,7 +288,7 @@ pub fn review_game(
     })
 }
 
-/// 立直決策時策略要打的牌：同一次詢問中策略何切的選擇；沒有何切決策（只能打一張）時是唯一的候選牌。
+/// 立直與手切摸切決策時策略要打的牌：同一次詢問中策略何切的選擇；沒有何切決策（只能打一種牌）時由合法動作推得。
 fn strategy_discard(records: &[DecisionRecord], i: usize, point: &DecisionPoint) -> Option<Pai> {
     let r = &records[i];
     let discard = records[..i]
@@ -297,6 +297,20 @@ fn strategy_discard(records: &[DecisionRecord], i: usize, point: &DecisionPoint)
         .find(|d| d.act_index == r.act_index && d.kind == DecisionKind::Discard);
     match discard {
         Some(d) => parse_discard_label(&d.options[d.chosen]),
+        // 只有一種牌可打時沒有何切紀錄：立直決策找可以立直的牌，手切摸切找兩種都能打的牌。
+        None if r.kind == DecisionKind::Tedashi => point.legal.iter().find_map(|a| match a {
+            Action::Discard {
+                pai,
+                tsumogiri: true,
+            } if point.legal.contains(&Action::Discard {
+                pai: *pai,
+                tsumogiri: false,
+            }) =>
+            {
+                Some(*pai)
+            }
+            _ => None,
+        }),
         None => point.legal.iter().find_map(|a| match a {
             Action::Riichi { pai, .. } => Some(*pai),
             _ => None,
@@ -403,6 +417,8 @@ fn classify(
         DecisionKind::Kan => "槓法不同".into(),
         DecisionKind::Riichi if player == 1 => "立直（策略默聽）".into(),
         DecisionKind::Riichi => "默聽（策略立直）".into(),
+        DecisionKind::Tedashi if player == 1 => "手切（策略摸切）".into(),
+        DecisionKind::Tedashi => "摸切（策略手切）".into(),
         DecisionKind::Call if strategy == 0 => "多鳴（策略不鳴）".into(),
         DecisionKind::Call if player == 0 => "漏鳴（策略會鳴）".into(),
         DecisionKind::Call => "鳴法不同".into(),

@@ -167,3 +167,84 @@ mod tests {
         assert_eq!(suit_counts(&v, 1), [1, 1, 1, 2]);
     }
 }
+
+/// 自己打出 `pai`（`tsumogiri` = 摸切、`riichi` = 立直宣言）之後的牌桌：手牌少一張、牌河多一張。
+/// 用來看「打出這張之後，別人眼中的我」（把自己的讀牌預測用在自己的座位上）。
+/// 立直時視為已成立（`riichi[me]` 設為 true）。
+pub fn view_after_discard(
+    view: &PlayerView,
+    pai: Pai,
+    tsumogiri: bool,
+    riichi: bool,
+) -> PlayerView {
+    let mut v = view.clone();
+    let me = usize::from(view.me);
+    v.hand.remove(pai.tile);
+    if let Some(i) = v.hand_pais.iter().position(|p| *p == pai) {
+        v.hand_pais.remove(i);
+    }
+    v.drawn = None;
+    let seq = view
+        .rivers
+        .iter()
+        .flatten()
+        .map(|d| d.seq + 1)
+        .max()
+        .unwrap_or(0);
+    v.rivers[me].push(DiscardRecord {
+        pai,
+        tsumogiri,
+        riichi_declared: riichi,
+        called: false,
+        seq,
+    });
+    v.riichi[me] |= riichi;
+    v.last_discard = Some((view.me, pai));
+    v
+}
+
+#[cfg(test)]
+mod after_discard_tests {
+    use super::*;
+    use mj_core::{TileCounts, parse_pais};
+
+    #[test]
+    fn view_after_discard_updates_hand_and_river() {
+        let pais = parse_pais("123m456p789s1125z5z").unwrap();
+        let mut view = PlayerView {
+            me: 2,
+            round_wind: 0,
+            kyoku: 0,
+            honba: 0,
+            riichi_sticks: 0,
+            scores: [25_000; 4],
+            dora_indicators: vec![],
+            hand: TileCounts::from_tiles(pais.iter().map(|p| p.tile)),
+            drawn: pais.last().copied(),
+            hand_pais: pais,
+            melds: Default::default(),
+            rivers: Default::default(),
+            riichi: [false; 4],
+            tiles_left_in_wall: 60,
+            total_kyoku: 8,
+            last_discard: None,
+        };
+        let five: Pai = "5z".parse().unwrap();
+        view.rivers[0].push(DiscardRecord {
+            pai: "1m".parse().unwrap(),
+            tsumogiri: true,
+            riichi_declared: false,
+            called: false,
+            seq: 4,
+        });
+        let v = view_after_discard(&view, five, false, true);
+        assert_eq!(v.hand.get(five.tile), 1);
+        assert_eq!(v.hand_pais.len(), 13);
+        assert_eq!(v.drawn, None);
+        let d = v.rivers[2].last().unwrap();
+        assert!(!d.tsumogiri && d.riichi_declared && d.seq == 5);
+        assert!(v.riichi[2]);
+        assert_eq!(trailing_tsumogiri(&v, 2), 0);
+        assert_eq!(last_tedashi(&v, 2), Some((0, five)));
+    }
+}

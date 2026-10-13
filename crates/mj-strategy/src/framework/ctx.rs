@@ -29,6 +29,7 @@ pub struct Ctx<'a> {
     pub(crate) kans: Vec<KanChoice>,
     pub(crate) win: Option<WinKind>,
     pub(crate) riichi_discard: Option<Pai>,
+    pub(crate) tedashi: Option<(Pai, bool)>,
     pub(crate) event_index: usize,
     params: Arc<ParamSet>,
     remaining: RemainingEstimate,
@@ -48,6 +49,7 @@ impl<'a> Ctx<'a> {
             kans: Vec::new(),
             win: None,
             riichi_discard: None,
+            tedashi: None,
             event_index: 0,
             params: Arc::default(),
             remaining: mj_tools::visible::remaining(view),
@@ -61,6 +63,13 @@ impl<'a> Ctx<'a> {
     pub fn with_params(mut self, p: Arc<ParamSet>) -> Self {
         self.params = p;
         self
+    }
+
+    /// 以另一個牌桌（例如 `tools::river::view_after_discard` 做出的假想牌桌）建立同種類、同參數的情境，
+    /// 用來「換個角度想」：例如把自己的讀牌預測用在自己身上，看別人眼中的我。
+    /// 在新情境寫的理由與預測不會被記錄。
+    pub fn imagine<'b>(&self, view: &'b PlayerView) -> Ctx<'b> {
+        Ctx::new(view, self.kind).with_params(self.params.clone())
     }
 
     /// 可調參數的值：有覆寫用覆寫值，否則用程式中的預設值（見 `framework::param`）。
@@ -92,6 +101,12 @@ impl<'a> Ctx<'a> {
         self
     }
 
+    /// 設定手切摸切決策的牌與是否立直（測試用）。
+    pub fn with_tedashi(mut self, pai: Pai, riichi: bool) -> Self {
+        self.tedashi = Some((pai, riichi));
+        self
+    }
+
     // ------------------------------------------------------------ 這次決策的選項
 
     /// 何切：可以打的牌（已排除食替禁止的牌；同種牌只列一次，赤五與普通 5 分開）。
@@ -117,6 +132,16 @@ impl<'a> Ctx<'a> {
     /// 立直決策：已經決定要打出的那張牌。
     pub fn riichi_discard(&self) -> Option<Pai> {
         self.riichi_discard
+    }
+
+    /// 手切摸切決策：要打出的牌。
+    pub fn tedashi_pai(&self) -> Option<Pai> {
+        self.tedashi.map(|(p, _)| p)
+    }
+
+    /// 手切摸切決策：這張牌是否為立直宣言牌。
+    pub fn declaring_riichi(&self) -> bool {
+        self.tedashi.is_some_and(|(_, r)| r)
     }
 
     /// 鳴牌、榮和決策：他家打出（或加槓）的那張牌，與打出者的座位。

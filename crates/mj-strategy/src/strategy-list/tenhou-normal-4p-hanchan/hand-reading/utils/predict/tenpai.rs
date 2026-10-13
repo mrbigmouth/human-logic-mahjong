@@ -8,6 +8,8 @@
 //!    - 最後一次手切的是中張牌（3–7）→ 拆搭子、手牌成形，較像聽牌；是字牌 → 還在整理孤立牌，較不像；
 //!    - 連續摸切 → 手牌沒有變化，較像聽牌；
 //!    - 有其他人立直 → 沒聽牌的人多半在防守，較不像聽牌（聽牌的人才會繼續推）。
+//! 4. 反詐騙：記憶中這家在荒牌流局時公開的聽牌狀態，和我當時的估計對照——
+//!    常常「看起來沒聽卻聽了」（藏聽牌）就提高，常常「看起來聽了卻沒聽」（虛張聲勢）就降低（[`calibration`]）。
 //!
 //! 數值以天鳳鳳凰卓牌譜（2026-10-06，434 場）的統計校準：`mj read-stats` 匯出特徵，
 //! 以邏輯迴歸估計各線索的勝算倍數，再在另一天的牌譜上驗證（見 docs/03「讀牌」）。
@@ -72,6 +74,38 @@ pub const PER_OTHER_RIICHI: Param = Param::new(
     "每位其他人立直的聽牌勝算倍數",
 );
 
+/// 反詐騙：是否依荒牌流局時公開的聽牌狀態，修正對這家的聽牌估計（0 = 不修正）。
+pub const CALIBRATE: Param = Param::new(
+    "antideceive.calibrate",
+    1.0,
+    0.0,
+    1.0,
+    "依流局公開的聽牌狀態修正對各家的聽牌估計（1 = 開、0 = 關）",
+);
+/// 修正的保守程度：相當於先假設有這麼多次「估計準確」的紀錄（次數少時修正小）。
+pub const CALIBRATE_PRIOR: Param = Param::new(
+    "antideceive.prior",
+    1.0,
+    0.1,
+    10.0,
+    "反詐騙修正的先驗次數（越大越保守）",
+);
+/// 修正倍數的範圍：[1 / MAX, MAX]。
+pub const CALIBRATE_MAX: f64 = 3.0;
+
+/// 反詐騙的勝算倍數：（實際聽牌次數 + 先驗）÷（估計的聽牌次數 + 先驗），
+/// 先驗以「估計準確」計（先驗次數 × 平均估計）。沒有紀錄時為 1。
+pub fn calibration(ctx: &Ctx, mem: &Memory, seat: Seat) -> f64 {
+    let r = &mem.reveals[usize::from(seat)];
+    if ctx.param(&CALIBRATE) < 0.5 || r.n == 0 {
+        return 1.0;
+    }
+    let prior = ctx.param(&CALIBRATE_PRIOR);
+    let mean = r.expected / f64::from(r.n);
+    let ratio = (r.actual + prior * mean) / (r.expected + prior * mean);
+    ratio.clamp(1.0 / CALIBRATE_MAX, CALIBRATE_MAX)
+}
+
 /// 常駐預測：每次輪到自己時，判斷其他三家是否聽牌（只為了評估預測準確度，不影響動作）。
 pub fn each_turn(ctx: &Ctx, mem: &mut Memory) {
     for seat in tools::table::opponents(ctx.view) {
@@ -107,7 +141,7 @@ pub fn predict(ctx: &Ctx, mem: &Memory, seat: Seat) -> f64 {
 }
 
 /// `seat` 此刻聽牌的機率（只計算，不記錄預測也不寫理由；決策中反覆使用時用這個）。
-pub fn estimate(ctx: &Ctx, _mem: &Memory, seat: Seat) -> f64 {
+pub fn estimate(ctx: &Ctx, mem: &Memory, seat: Seat) -> f64 {
     let v = ctx.view;
     let s = usize::from(seat);
     if v.riichi[s] {
@@ -130,5 +164,6 @@ pub fn estimate(ctx: &Ctx, _mem: &Memory, seat: Seat) -> f64 {
     factor *= ctx.param(&PER_TRAILING_TSUMOGIRI).powi(trail);
     let others_riichi = (0..4).filter(|&o| o != s && v.riichi[o]).count().min(2) as i32;
     factor *= ctx.param(&PER_OTHER_RIICHI).powi(others_riichi);
+    factor *= calibration(ctx, mem, seat);
     odds::scale(BASE[melds][group], factor)
 }

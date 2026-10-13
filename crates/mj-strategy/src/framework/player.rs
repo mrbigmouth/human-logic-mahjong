@@ -2,7 +2,7 @@
 //!
 //! 引擎每次只問「要做哪個動作」；這裡把它拆成依人類思考順序的幾個決策：
 //!
-//! - 自己的回合：九種九牌 → 和牌與否 → 開槓 → 何切 → 立直與否
+//! - 自己的回合：九種九牌 → 和牌與否 → 開槓 → 何切 → 立直與否 → 手切摸切
 //! - 他家打牌時：和牌與否 → 鳴牌
 //!
 //! 每個決策都可以記錄下來（選項、選擇、理由、預測），供評估與復盤使用。
@@ -235,6 +235,10 @@ impl<M: Default> BookPlayer<M> {
 
     /// 自己的回合。
     fn own_turn(&mut self, view: &PlayerView, legal: &[Action]) -> Action {
+        if let Some(f) = self.book.think {
+            let ctx = self.ctx(view, DecisionKind::Predict);
+            f(&ctx, &mut self.mem);
+        }
         self.run_each_turn(view);
         if legal.contains(&Action::KyuushuKyuuhai) {
             let ctx = self.ctx(view, DecisionKind::Kyuushu);
@@ -272,26 +276,34 @@ impl<M: Default> BookPlayer<M> {
             let f = self.book.discard.expect("策略必須登記何切（discard）決策");
             self.step(ctx, &candidates, labels, Some(f), candidates[0])
         };
-        // 打剛摸到的牌時用摸切，否則手切。
-        let tsumogiri = view.drawn == Some(pai)
-            && legal.contains(&Action::Discard {
-                pai,
-                tsumogiri: true,
-            });
-        let tsumogiri = tsumogiri
-            || !legal.contains(&Action::Discard {
-                pai,
-                tsumogiri: false,
-            });
-        if legal.contains(&Action::Riichi { pai, tsumogiri }) {
+        // 立直與否：手切、摸切兩種版本都合法時，立直的合法性相同，先用其中一種判斷。
+        let can = |tsumogiri: bool, riichi: bool| {
+            legal.contains(&if riichi {
+                Action::Riichi { pai, tsumogiri }
+            } else {
+                Action::Discard { pai, tsumogiri }
+            })
+        };
+        let riichi = (can(true, true) || can(false, true)) && {
             let ctx = self
                 .ctx(view, DecisionKind::Riichi)
                 .with_riichi_discard(pai);
-            if self.yes_no(ctx, "默聽", "立直", self.book.riichi, true) {
-                return Action::Riichi { pai, tsumogiri };
-            }
+            self.yes_no(ctx, "默聽", "立直", self.book.riichi, true)
+        };
+        // 手切摸切：兩種都合法時才問（打的是剛摸到的那種牌、手中也有同樣的牌）。
+        let tsumogiri = if can(true, riichi) && can(false, riichi) {
+            let ctx = self
+                .ctx(view, DecisionKind::Tedashi)
+                .with_tedashi(pai, riichi);
+            !self.yes_no(ctx, "摸切", "手切", self.book.tedashi, false)
+        } else {
+            can(true, riichi)
+        };
+        if riichi {
+            Action::Riichi { pai, tsumogiri }
+        } else {
+            Action::Discard { pai, tsumogiri }
         }
-        Action::Discard { pai, tsumogiri }
     }
 }
 
@@ -344,7 +356,7 @@ fn discard_candidates(legal: &[Action]) -> Vec<Pai> {
 /// 把一個實際動作（例如牌譜中玩家的選擇）對應到 `kind` 這種決策的選項編號；選項的列法與 [`BookPlayer`] 相同。
 ///
 /// - `legal`：那次詢問的合法動作；
-/// - `riichi_pai`：立直決策時，策略決定要打的牌（立直決策是「打這張時要不要立直」）。
+/// - `riichi_pai`：立直與手切摸切決策時，策略決定要打的牌（立直決策是「打這張時要不要立直」）。
 ///
 /// 動作走的是另一條路（例如評估何切，但玩家自摸了；評估立直，但玩家打的是別張）時回傳 `None`：
 /// 這個決策無法比較，差異會出現在更早的決策上。
@@ -380,6 +392,14 @@ pub fn option_of_action(
         DecisionKind::Riichi => match action {
             Action::Riichi { pai, .. } if Some(*pai) == riichi_pai => Some(1),
             Action::Discard { pai, .. } if Some(*pai) == riichi_pai => Some(0),
+            _ => None,
+        },
+        DecisionKind::Tedashi => match action {
+            Action::Discard { pai, tsumogiri } | Action::Riichi { pai, tsumogiri }
+                if Some(*pai) == riichi_pai =>
+            {
+                yes_no(!tsumogiri)
+            }
             _ => None,
         },
         DecisionKind::Call => {
@@ -681,6 +701,85 @@ mod tests {
         assert_eq!(r[0].notes, vec!["固定打 5z".to_string()]);
         assert_eq!(r[1].kind, DecisionKind::Riichi);
         assert_eq!(r[1].options[r[1].chosen], "默聽");
+    }
+
+    /// 打的牌與剛摸到的牌同種時才問手切摸切：沒登記時摸切；登記的決策回傳 true 時手切；
+    /// 立直時也問（`declaring_riichi`），結果帶到立直動作上；只有一種版本時不問。
+    #[test]
+    fn tedashi_decision() {
+        // 手中 5z 一張、又摸到 5z：兩種版本都合法。
+        let hand = "123m456p789s1125z5z";
+        let mut both = legal(hand);
+        for riichi in [false, true] {
+            let pai = p("5z");
+            both.push(if riichi {
+                Action::Riichi {
+                    pai,
+                    tsumogiri: true,
+                }
+            } else {
+                Action::Discard {
+                    pai,
+                    tsumogiri: true,
+                }
+            });
+        }
+        let mut pl = BookPlayer::new(book(), true, None);
+        let a = pl.act(&view(hand), &both);
+        assert_eq!(
+            a,
+            Action::Discard {
+                pai: p("5z"),
+                tsumogiri: true
+            }
+        );
+        // 沒登記手切摸切決策：用預設（摸切），仍然記錄。
+        let r = pl.take_records();
+        assert_eq!(r.last().unwrap().kind, DecisionKind::Tedashi);
+        assert_eq!(r.last().unwrap().options[r.last().unwrap().chosen], "摸切");
+
+        let mut b: Book<u32> = Book::default();
+        b.discard(|_, _| "5z".parse().unwrap());
+        b.riichi(|_, _| true);
+        b.tedashi(|ctx, _| {
+            assert_eq!(ctx.tedashi_pai(), Some("5z".parse().unwrap()));
+            ctx.declaring_riichi()
+        });
+        let mut pl = BookPlayer::new(Arc::new(b), true, None);
+        assert_eq!(
+            pl.act(&view(hand), &both),
+            Action::Riichi {
+                pai: p("5z"),
+                tsumogiri: false
+            }
+        );
+        let r = pl.take_records();
+        let kinds: Vec<_> = r.iter().map(|r| r.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                DecisionKind::Discard,
+                DecisionKind::Riichi,
+                DecisionKind::Tedashi
+            ]
+        );
+        // 實際動作對應回手切摸切的選項。
+        let riichi = |tsumogiri| Action::Riichi {
+            pai: p("5z"),
+            tsumogiri,
+        };
+        let opt = |a| option_of_action(DecisionKind::Tedashi, &both, &a, Some(p("5z")));
+        assert_eq!(opt(riichi(true)), Some(0));
+        assert_eq!(opt(riichi(false)), Some(1));
+
+        // 只有手切版本：不問。
+        let mut pl = BookPlayer::new(book(), true, None);
+        pl.act(&view(hand), &legal(hand));
+        assert!(
+            pl.take_records()
+                .iter()
+                .all(|r| r.kind != DecisionKind::Tedashi)
+        );
     }
 
     /// 決策函式回傳不在選項中的牌：改用預設選項並標記 invalid。

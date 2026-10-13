@@ -90,6 +90,9 @@ enum Command {
         /// 起始 seed
         #[arg(long, default_value_t = 0)]
         seed: u64,
+        /// 四個座位放不同的策略（逗號分隔，輪換座位），依被預測者分組：看讀牌者對每種打法讀得準不準
+        #[arg(long)]
+        seats: Option<String>,
     },
     /// 列出策略的可調參數（名稱、目前值、預設值、範圍、說明）。策略名稱可加 `@覆寫`，
     /// 例如 `策略@params.txt` 或 `策略@call.far_shanten=3`（所有指令的策略名稱都可以這樣寫）
@@ -265,6 +268,9 @@ enum Command {
         /// 起始 seed
         #[arg(long, default_value_t = 0)]
         seed: u64,
+        /// 場地對戰：兩方各自和三家這個對手同桌（不同桌），在同樣的牌山上比較
+        #[arg(long)]
+        field: Option<String>,
     },
     /// 練習 App 的網頁版：以 HTTP 提供 UI 的 API（`POST /api/<名稱>`）與前端檔案（M9）
     Serve {
@@ -366,7 +372,11 @@ fn main() -> ExitCode {
             logs,
             games,
             seed,
-        } => exit(predict_eval::run(&strategy, &logs, games, seed)),
+            seats,
+        } => exit(match seats {
+            Some(seats) => predict_eval::run_mixed(&seats, games, seed),
+            None => predict_eval::run(&strategy, &logs, games, seed),
+        }),
         Command::Tune {
             strategy,
             params,
@@ -553,7 +563,8 @@ fn main() -> ExitCode {
             entrants,
             blocks,
             seed,
-        } => exit(simulate::run(&entrants, blocks, seed)),
+            field,
+        } => exit(simulate::run(&entrants, blocks, seed, field.as_deref())),
         Command::Serve { port, host, dir } => exit(serve::run(&host, port, &dir)),
     }
 }

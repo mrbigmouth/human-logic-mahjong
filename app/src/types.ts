@@ -169,7 +169,7 @@ export interface NewGame {
   names: string[];
 }
 
-export type DecisionKind = "Kyuushu" | "Win" | "Kan" | "Discard" | "Riichi" | "Call";
+export type DecisionKind = "Kyuushu" | "Win" | "Kan" | "Discard" | "Riichi" | "Call" | "Tedashi";
 
 export interface Evaluation {
   /** 各選項的平均結果；沒有評估的選項為 null */
@@ -243,6 +243,7 @@ export const KIND_NAMES: Record<DecisionKind, string> = {
   Discard: "何切",
   Riichi: "立直與否",
   Call: "鳴牌",
+  Tedashi: "手切摸切",
 };
 
 /** 單一決策判為明顯失誤的門檻（與 mj-review 的 MISTAKE_Z 相同）。 */

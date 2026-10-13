@@ -19,19 +19,22 @@ pub enum DecisionKind {
     Riichi,
     /// 他家打牌可以吃碰槓時：要不要鳴、怎麼鳴
     Call,
+    /// 打出的牌和剛摸到的牌同種時：摸切，或從手中打出同一種牌（手切）。手牌結果相同，對手看到的資訊不同
+    Tedashi,
     /// 常駐預測（不是決策）：每次輪到自己時執行，只用來記錄預測，不影響動作
     Predict,
 }
 
 impl DecisionKind {
     /// 所有「決策」種類（不含常駐預測）。
-    pub const ALL: [DecisionKind; 6] = [
+    pub const ALL: [DecisionKind; 7] = [
         DecisionKind::Kyuushu,
         DecisionKind::Win,
         DecisionKind::Kan,
         DecisionKind::Discard,
         DecisionKind::Riichi,
         DecisionKind::Call,
+        DecisionKind::Tedashi,
     ];
 
     /// 中文名稱。
@@ -43,6 +46,7 @@ impl DecisionKind {
             DecisionKind::Discard => "何切",
             DecisionKind::Riichi => "立直與否",
             DecisionKind::Call => "鳴牌",
+            DecisionKind::Tedashi => "手切摸切",
             DecisionKind::Predict => "常駐預測",
         }
     }

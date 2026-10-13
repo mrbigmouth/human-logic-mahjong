@@ -32,8 +32,8 @@ M2.5 重構後的開發循環是「寫判斷 → 評估（預測看準確度、�
 | M6 | 策略 | 讀牌：聽牌、聽牌張、打點預測（手切摸切、牌河順序、副露），以天鳳牌譜校準（`hand-reading`） | ✅ |
 | M7 | 產品 | 復盤（CLI／JSON）：使用者牌譜逐手比對，附策略理由與反事實期望值、失誤統計（`mj review`） | ✅ |
 | M8 | 評估 | 具名可調參數與自動調整（`mj tune`）；mjai 介接（`mj-mjai`）；與強 AI（Mortal）對戰與一致率（`mj agree`） | ✅ |
-| M9 | 產品 | Tauri 桌面練習 App（人機對戰、即時提示、對局後復盤）；`mj serve` | 進行中 |
-| M10 | 策略 | 印象操作（詐騙與反詐騙） | |
+| M9 | 產品 | Tauri 桌面練習 App（人機對戰、即時提示、對局後復盤）；`mj serve` | ✅ |
+| M10 | 策略 | 印象操作：用自己的讀牌模型看自己（手切摸切、迷彩）；反詐騙（流局對照）；`simulate --field`、`predict-eval --seats` | ✅ |
 
 ## 常用指令
 
@@ -57,7 +57,8 @@ mj nanikiru 23m456p789s11z224s9m --dora 1s      # 何切：執行策略決策並
 mj selfplay --games 2000 --seats tenhou-normal-4p-hanchan/hand-reading,greedy,greedy,random   # 對戰統計（預設每場輪換座位）
 mj predict-eval --strategy tenhou-normal-4p-hanchan/hand-reading --games 300    # 預測準確度
 mj evaluate --strategy tenhou-normal-4p-hanchan/hand-reading --games 20         # 決策品質（反事實模擬；--metric points 較快、雜訊小）
-mj simulate tenhou-normal-4p-hanchan/hand-reading greedy --blocks 1000           # duplicate 對戰（成對比較兩個策略／版本）
+mj simulate tenhou-normal-4p-hanchan/hand-reading greedy --blocks 1000           # duplicate 對戰（成對比較兩個策略／版本）；附每局的和了率、放銃率
+mj simulate <A> <B> --field <X> --blocks 5000                                    # 場地對戰：A、B 各自和三家 X 同桌，比較「面對 X 時」的差別
 mj import data/tenhou                                               # 匯入牌譜：引擎重播並與原牌譜比對點數
 mj predict-eval --logs data/tenhou                                  # 策略旁觀真人對局，評估預測準確度
 mj read-stats data/tenhou --out target/read-stats                   # 匯出讀牌特徵＋真相的 CSV（校準讀牌預測用）
@@ -103,10 +104,10 @@ Crate 相依鏈：`mj-core → mj-calc → mj-rules → mj-engine → mj-tools �
 - **mj-strategy**：
   - `src/strategy-list/<規則>/<策略>/`：策略本體，給人編輯。第一層是規則，第二層是同規則下的各個策略，完整名稱「規則／策略」（例如 `tenhou-normal-4p-hanchan/push-fold`）。每個策略必須有 `README.md`（`# 標題`＋一段摘要＋特色，`Strategy::title/summary/readme` 讀取，供 `mj strategies` 與日後 GUI 選單顯示；改打法時同步更新）；規則目錄也有 `README.md`。`main.rs` 的 `register(&mut Book<Memory>)` 登記決策；`memory.rs` 的 `Memory`（需 `Default`）是整場共用的記憶，`observe` 由事件更新；`decision/*.rs` 每檔匯出一個 `decide(ctx, mem)`；`utils/predict/` 是預測函式。
   - `build.rs` 掃描 strategy-list，產生帶 `#[path]` 的模組樹、`all_strategies()` 與 `all_rules()`（`-` 轉成 `_`，README 以 `include_str!` 嵌入），由 `lib.rs` 的 `include!` 引入。新增檔案不需要寫 `mod`。同策略內互相引用用 `super::super::...`；檔案開頭 `use crate::prelude::*;`。
-  - 主力策略是 `tenhou-normal-4p-hanchan/hand-reading`（M6）；`push-fold`（M5）與 `efficiency-fold`（M4）是凍結的舊版（比較基準，不再修改）。改策略後用 `mj simulate tenhou-normal-4p-hanchan/hand-reading tenhou-normal-4p-hanchan/push-fold --blocks 5000 --seed <新 seed>` 確認是否真的變強（調參時換 seed 再驗證一次，避免對同一組牌山過度調整）。
+  - 主力策略是 `tenhou-normal-4p-hanchan/hand-reading`（M6，M10 加上印象操作：`utils/image.rs` 用自己的讀牌預測看「別人眼中的我」）；`push-fold`（M5）與 `efficiency-fold`（M4）是凍結的舊版（比較基準，不再修改）。改策略後用 `mj simulate tenhou-normal-4p-hanchan/hand-reading tenhou-normal-4p-hanchan/push-fold --blocks 5000 --seed <新 seed>` 確認是否真的變強（調參時換 seed 再驗證一次，避免對同一組牌山過度調整）。
   - 可調參數：策略中的門檻寫成 `pub const X: Param = Param::new("名稱", 預設, 下限, 上限, "說明")`，以 `ctx.param(&X)` 讀取；build.rs 自動收集成 `Strategy::params()`，`Strategy::with_params(ParamSet)` 覆寫（`find_strategy_spec` 解析 `名稱@覆寫`）。調整後要把程式中的預設值改掉。
   - `memory.rs` 的 `observe` 只記「人類會記的事」（例如筋牌騙的次數）；牌河上看得到的手切／摸切標記、副露等用 `tools::river` 直接從 `ctx.view` 讀；`book.predict_each_turn` 登記每回合執行、只用於評估的常駐預測。
-  - `framework/player.rs`（`BookPlayer`）把引擎的單次詢問拆成依人類順序的決策：自己回合「九種九牌 → 和牌 → 開槓 → 何切 → 立直」，他家打牌「和牌 → 鳴牌」。決策結果必須是框架列出的選項之一，否則改用預設並標記 `invalid`。每個決策可記錄成 `DecisionRecord`（選項、選擇、`ctx.note` 理由、`ctx.claim` 預測），也可用 `Force` 強制指定選項。
+  - `framework/player.rs`（`BookPlayer`）把引擎的單次詢問拆成依人類順序的決策：自己回合「九種九牌 → 和牌 → 開槓 → 何切 → 立直 → 手切摸切」，他家打牌「和牌 → 鳴牌」。決策結果必須是框架列出的選項之一，否則改用預設並標記 `invalid`。每個決策可記錄成 `DecisionRecord`（選項、選擇、`ctx.note` 理由、`ctx.claim` 預測），也可用 `Force` 強制指定選項。
 - **mj-engine 的快照**（`snapshot.rs`）：`capture_snapshot` 重播到「即將第 n 次詢問某座位」時保存局面；`Snapshot::determinize` 依決策者視角重抽看不到的牌；`resume_game` 從快照繼續。快照點依賴 `Table.asks`（每座位被詢問次數 = 玩家的 `act_index`）。
 - **mj-paifu**：牌譜匯入。`tenhou_xml`／`tenhou_json` 解析成 `GameRecord`（配牌、依時間排序的 `Step`、原牌譜點數）；`replay` 由配牌與摸牌順序還原牌山（`build_wall`）、四家用共用進度的 `ScriptedPlayer` 照牌譜出牌讓引擎重打，再比對每局開始／結束與終局點數。可記錄每次詢問的 `DecisionPoint`（視角、合法動作、牌譜的選擇），也可掛策略當「旁觀者」（收到事件與詢問、做預測，動作照牌譜）。新格式只要輸出 `GameRecord` 即可。
 - **mj-review**（M7）：牌譜復盤。可另外掛 mjai AI（`Options::mjai`）一起旁觀，算三方一致率（`agreement`）；`evaluate: false` 只比選擇不做反事實評估。重播時四家掛策略旁觀、記下策略的決策，用 `framework::option_of_action` 把玩家的實際動作對應到決策選項（走了另一條路的決策無法比較）；選擇不同的決策用 `mj_paifu::replay::capture` 在牌譜局面保存快照，再用 `counterfactual::evaluate_snapshot` 重打比較。「失誤」只比較玩家與策略兩個選項的成對差值（不和「最高期望值」比，最高者有挑選偏差）；差異依類型分類並彙整。

@@ -26,6 +26,8 @@ pub struct Judged {
     pub truth: bool,
     /// 被預測者當時的情境
     pub target: TargetSituation,
+    /// 被預測者的座位（預測自己的和牌等沒有對象時為 `None`）
+    pub target_seat: Option<mj_engine::Seat>,
 }
 
 /// 預測的分組方式。
@@ -196,6 +198,7 @@ fn judge_all(players: &mut [Box<dyn StrategyPlayer>], log: &[Event]) -> Vec<Judg
                     p: c.claim.p(),
                     truth,
                     target: c.target,
+                    target_seat: c.claim.target(),
                 });
             }
         }
@@ -216,6 +219,36 @@ pub fn collect(strategy: Arc<dyn Strategy>, games: u64, seed: u64) -> Result<Vec
             let cfg = GameConfig::new(RiichiConfig::TENHOU, seed.wrapping_add(g));
             let result = run_game_with(&cfg, refs, true).map_err(|e| e.to_string())?;
             Ok(judge_all(&mut sps, &result.log))
+        })
+        .collect::<Result<_, String>>()?;
+    Ok(per_game.into_iter().flatten().collect())
+}
+
+/// 四個座位放不同的策略（每場輪換座位：第 g 場座位 s 是 `strategies[(s + g) % 4]`），
+/// 收集並判定所有預測。回傳（被預測者是第幾個策略, 預測）；
+/// 用來看「讀牌者對某種打法（例如會詐騙的）讀得準不準」。
+pub fn collect_mixed(
+    strategies: &[Arc<dyn Strategy>; 4],
+    games: u64,
+    seed: u64,
+) -> Result<Vec<(Option<usize>, Judged)>, String> {
+    let per_game: Vec<Vec<(Option<usize>, Judged)>> = (0..games)
+        .into_par_iter()
+        .map(|g| {
+            let who = |s: usize| (s + g as usize) % 4;
+            let mut sps: Vec<_> = (0..4)
+                .map(|s| strategies[who(s)].player(true, None))
+                .collect();
+            let refs: [&mut dyn Player; 4] = {
+                let mut it = sps.iter_mut().map(|p| p.as_mut() as &mut dyn Player);
+                std::array::from_fn(|_| it.next().unwrap())
+            };
+            let cfg = GameConfig::new(RiichiConfig::TENHOU, seed.wrapping_add(g));
+            let result = run_game_with(&cfg, refs, true).map_err(|e| e.to_string())?;
+            Ok(judge_all(&mut sps, &result.log)
+                .into_iter()
+                .map(|j| (j.target_seat.map(|s| who(usize::from(s))), j))
+                .collect())
         })
         .collect::<Result<_, String>>()?;
     Ok(per_game.into_iter().flatten().collect())

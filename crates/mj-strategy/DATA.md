@@ -42,6 +42,8 @@
 | `kan_options()` | `&[KanChoice]` | 開槓：可槓的選項 |
 | `win_kind()` | `Option<WinKind>` | 和牌決策：自摸／榮和／搶槓 |
 | `riichi_discard()` | `Option<Pai>` | 立直決策：已經決定要打的那張 |
+| `tedashi_pai()` | `Option<Pai>` | 手切摸切決策：要打的牌（剛摸到的牌，手中也有同一種） |
+| `declaring_riichi()` | `bool` | 手切摸切決策：這張是否為立直宣言牌 |
 | `offered()` | `Option<(Seat, Pai)>` | 鳴牌、榮和決策：他家打出（或加槓）的牌與座位 |
 
 不屬於這次決策的選項是空的（例如何切時 `call_options()` 為空）。
@@ -59,6 +61,7 @@
 | `remaining()` | `&[f32; 34]` | 每種牌還剩幾張 = 4 − 自己看得到的張數（索引 = `Tile::index()`） |
 | `standing()` | `Standing` | 名次與點差（第 6 節） |
 | `dora_value(tile)` | `u8` | 這種牌值幾張寶牌（不含赤五） |
+| `imagine(&view)` | `Ctx` | 以另一個牌桌建立同種類、同參數的情境（例如 `tools::river::view_after_discard` 做出的「打了這張之後」），用來換個角度想，例如把自己的讀牌預測用在自己身上；新情境寫的理由與預測不會被記錄 |
 
 ### 紀錄
 
@@ -69,7 +72,7 @@
 | `notes()` | 目前寫下的理由（測試用） |
 
 測試時可以直接建立：`Ctx::new(&view, DecisionKind::Discard).with_discards(vec![...])`，
-另有 `with_calls`、`with_win`、`with_riichi_discard`。
+另有 `with_calls`、`with_win`、`with_riichi_discard`、`with_tedashi(pai, 立直)`、`with_params`。
 
 ---
 
@@ -166,7 +169,7 @@
 
 | 型別 | 值 |
 |---|---|
-| `DecisionKind` | `Kyuushu` 九種九牌、`Win` 和牌與否、`Kan` 開槓、`Discard` 何切、`Riichi` 立直與否、`Call` 鳴牌、`Predict` 常駐預測（不是決策） |
+| `DecisionKind` | `Kyuushu` 九種九牌、`Win` 和牌與否、`Kan` 開槓、`Discard` 何切、`Riichi` 立直與否、`Call` 鳴牌、`Tedashi` 手切摸切、`Predict` 常駐預測與每回合思考（不是決策） |
 | `WinKind` | `Tsumo` 自摸、`Ron` 榮和、`Chankan` 搶槓 |
 | `KanChoice` | `Ankan(Tile)` 暗槓、`Kakan(Pai)` 加槓 |
 | `CallChoice` | `Pass` 不鳴、`Chi([Pai; 2])` 用手中這兩張吃、`Pon([Pai; 2])` 用手中這兩張碰、`Daiminkan` 明槓 |

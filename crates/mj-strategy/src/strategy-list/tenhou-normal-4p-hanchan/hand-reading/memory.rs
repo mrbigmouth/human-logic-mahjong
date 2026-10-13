@@ -11,6 +11,32 @@ pub struct Memory {
     pub riichi_count: [u32; 4],
     /// 各家用「筋牌」和牌（筋牌騙）的次數：次數多的人，他的筋牌不可信
     pub suji_trap_wins: [u32; 4],
+    /// 本局各家是否已立直
+    pub riichi_now: [bool; 4],
+    /// 本局最近一次（自己的回合）我估計各家聽牌的機率（`think` 寫入）
+    pub tenpai_guess: [Option<f64>; 4],
+    /// 各家「看起來」與「實際」聽牌的對照（荒牌流局時公開，見 [`Reveals`]）
+    pub reveals: [Reveals; 4],
+}
+
+/// 一家在荒牌流局時公開的聽牌狀態，與我最後一次估計的對照（反詐騙）。
+/// 只用荒牌流局：每家都會公開，沒有挑選偏差（和牌時只看得到和牌者，和牌者一定聽牌）。
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Reveals {
+    /// 次數
+    pub n: u32,
+    /// 我估計的聽牌機率合計（期望的聽牌次數）
+    pub expected: f64,
+    /// 實際聽牌的次數
+    pub actual: f64,
+}
+
+/// 每回合思考：記下我現在估計各家聽牌的機率（荒牌流局時和真相對照）。
+pub fn think(ctx: &Ctx, mem: &mut Memory) {
+    for seat in tools::table::opponents(ctx.view) {
+        let p = super::utils::predict::tenpai::estimate(ctx, mem, seat);
+        mem.tenpai_guess[usize::from(seat)] = Some(p);
+    }
 }
 
 /// 觀察每個事件，更新記憶。
@@ -20,9 +46,34 @@ pub fn observe(_me: Seat, event: &Event, mem: &mut Memory) {
         // 新的一局：本局的記憶重設，跨局的記憶（立直次數、筋牌騙）保留。
         Event::StartKyoku { .. } => {
             mem.rivers = Default::default();
+            mem.riichi_now = [false; 4];
+            mem.tenpai_guess = [None; 4];
         }
         Event::Discard { seat, pai, .. } => mem.rivers[usize::from(*seat)].push(pai.tile),
-        Event::RiichiAccepted { seat } => mem.riichi_count[usize::from(*seat)] += 1,
+        Event::RiichiAccepted { seat } => {
+            mem.riichi_count[usize::from(*seat)] += 1;
+            mem.riichi_now[usize::from(*seat)] = true;
+        }
+        // 荒牌流局：每家公開是否聽牌，和我最後的估計對照（立直者一定聽牌，不列入）。
+        Event::HandEnd {
+            end:
+                HandEnd::Draw {
+                    reason: mj_engine::DrawReason::Exhaustive,
+                    tenpai,
+                    ..
+                },
+            ..
+        } => {
+            for (s, r) in mem.reveals.iter_mut().enumerate() {
+                if let Some(p) = mem.tenpai_guess[s]
+                    && !mem.riichi_now[s]
+                {
+                    r.n += 1;
+                    r.expected += p;
+                    r.actual += f64::from(u8::from(tenpai[s]));
+                }
+            }
+        }
         Event::HandEnd {
             end:
                 HandEnd::Win {
