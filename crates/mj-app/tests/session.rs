@@ -4,9 +4,11 @@ use mj_app::{ReviewConfig, ReviewState, Session, SessionConfig};
 use std::time::Duration;
 
 /// 扮演人類打完整場：照提示的動作打（沒有提示時選第一個）。回傳收到的幀數。
+/// 同時檢查和牌路線：打牌時常常有路線，第一張要打的牌一定是合法的打法。
 fn play_out(s: &Session) -> usize {
     let mut since = 0;
     let mut asks = 0;
+    let mut with_routes = 0;
     loop {
         let u = s.poll(since, Duration::from_secs(10));
         since = u.next;
@@ -15,6 +17,7 @@ fn play_out(s: &Session) -> usize {
         }
         if u.game_over.is_some() {
             assert!(asks > 0);
+            assert!(asks < 10 || with_routes > 0, "{asks} 次詢問都沒有和牌路線");
             return since;
         }
         if let Some(ask) = u.ask {
@@ -25,6 +28,21 @@ fn play_out(s: &Session) -> usize {
                 "只能摸切時不應詢問"
             );
             let hint = ask.hint.expect("每次詢問都有提示");
+            for r in &hint.routes {
+                let first = r.discards.first().expect("摸牌後的路線先打一張");
+                // 路線用牌種（赤五寫成 5），合法動作可能是赤五（0）。
+                let kind = |p: &str| p.replacen('0', "5", 1);
+                assert!(
+                    ask.actions
+                        .iter()
+                        .any(|a| a.pai.as_deref().map(kind).as_deref() == Some(first.as_str())),
+                    "路線要打的 {first} 不是合法的打法"
+                );
+                assert!(r.draws.contains(&r.win_tile), "和牌張是要摸的牌之一");
+            }
+            if !hint.routes.is_empty() {
+                with_routes += 1;
+            }
             let i = hint.action.expect("提示的動作是合法動作之一");
             // 過期的詢問編號會被拒絕。
             assert!(s.act(ask.id + 1, i).is_err());

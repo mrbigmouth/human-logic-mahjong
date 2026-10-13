@@ -146,6 +146,12 @@ src/strategy-list/
 | `open_yaku_path(view, &melds, &concealed) -> OpenYakuPath` | 指定副露與門前牌時的役路線 |
 | `OpenYakuPath` | `None`（無役）、`Yakuhai`（役牌）、`Tanyao`（斷么九）、`Flush`（染手） |
 
+### `tools::routes` 和牌路線
+| 函式 | 說明 |
+|---|---|
+| `win_routes(view, &hand, limit) -> Vec<WinRoute>` | 離和牌最近的完成形（向聽數 ≤ 2）：每一步摸一張讓向聽前進的牌、打一張維持向聽的牌。手牌是摸牌後的 3k+2 張時，第一張要打的牌在 `discards[0]`。依機會排序，最多 `limit` 條；點數最高的路線不在其中時附在最後 |
+| `WinRoute` | `discards`（要打的牌）、`draws`（要摸的牌，排序）、`hand`（完成時的門前手牌）、`win_tile`（點數最高的和牌張）、`score`（榮和的計分；無役 `None`）、`points`、`assumes_riichi`（門前時假設立直）、`chance`（要摸的牌的剩餘張數組合數相乘，只用來比較路線） |
+
 ### `tools::value` 點數
 | 函式 | 說明 |
 |---|---|

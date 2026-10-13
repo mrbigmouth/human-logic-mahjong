@@ -932,3 +932,34 @@ button.small {
   gap: 2px;
   font-size: 13px;
 }
+
+/* ---------- 和牌路線（M13） ---------- */
+.routes {
+  font-size: 14px;
+  border-collapse: collapse;
+}
+.routes th {
+  text-align: left;
+  color: var(--muted);
+  font-weight: normal;
+  padding: 1px 12px 4px 0;
+}
+.routes td {
+  padding: 3px 12px 3px 0;
+  white-space: nowrap;
+  border-bottom: 1px solid #333c47;
+}
+.routes .route-hand .tile {
+  --w: 18px;
+}
+.routes .route-hand .tile.mark-hint {
+  transform: none;
+}
+.routes .pts {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.routes .yaku-list {
+  white-space: normal;
+  max-width: 260px;
+}

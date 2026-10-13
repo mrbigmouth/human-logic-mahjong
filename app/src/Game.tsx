@@ -6,7 +6,7 @@ import { Board, Meld, REL_NAMES, WINDS, relative, shortName } from "./Board";
 import { useBoardSize } from "./layout";
 import { play, type SoundKind } from "./sounds";
 import { Tile, TileText, Tiles } from "./Tile";
-import type { ActionView, Ask, EventView, Frame, GameOver, NewGame, TableView, Update } from "./types";
+import type { ActionView, Ask, EventView, Frame, GameOver, NewGame, TableView, Update, WinRoute } from "./types";
 
 interface Props {
   game: NewGame;
@@ -150,6 +150,7 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
   const tabs: [Tab, string, boolean][] = [
     ["hint", "提示", hint !== null],
     ["efficiency", "牌效", hint !== null && hint.efficiency.length > 0],
+    ["routes", "和牌路線", hint !== null && hint.routes.length > 0],
     ["log", "紀錄", false],
     ["info", "對局資訊", false],
   ];
@@ -238,6 +239,12 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
               ) : (
                 <div className="muted">輪到你打牌時，這裡會列出每張牌打出後的向聽數與進張。</div>
               ))}
+            {tab === "routes" &&
+              (hint && hint.routes.length > 0 ? (
+                <RoutesTable routes={hint.routes} />
+              ) : (
+                <div className="muted">輪到你打牌、離聽牌 2 向聽以內時，這裡會列出最近的和牌形、還要摸哪些牌與預估點數。</div>
+              ))}
             {tab === "log" && (
               <div className="log">
                 {events.map((f, i) => (
@@ -284,7 +291,7 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
   );
 }
 
-type Tab = "hint" | "efficiency" | "log" | "info";
+type Tab = "hint" | "efficiency" | "routes" | "log" | "info";
 
 /** 播放到這一幀時的音效。 */
 function soundFor(ev: EventView): SoundKind | null {
@@ -443,6 +450,65 @@ function EfficiencyTable({ hint }: { hint: NonNullable<Ask["hint"]> }): ReactNod
             </td>
           </tr>
         ))}
+      </tbody>
+    </table>
+  );
+}
+
+/** 和牌路線：還要摸的牌、要打的牌、完成形、役與點數。機會以列出的路線合計為 100% 換算。 */
+function RoutesTable({ routes }: { routes: WinRoute[] }) {
+  const total = routes.reduce((a, r) => a + r.chance, 0) || 1;
+  return (
+    <table className="routes">
+      <thead>
+        <tr>
+          <th>打</th>
+          <th>要摸</th>
+          <th>完成形</th>
+          <th>役</th>
+          <th>榮和</th>
+          <th title="各路線要摸的牌的剩餘張數組合，換算成列出的路線之間的比例">機會</th>
+        </tr>
+      </thead>
+      <tbody>
+        {routes.map((r, i) => {
+          // 完成形中標出和牌張（只標一張）。
+          const win = r.hand.indexOf(r.win_tile);
+          return (
+            <tr key={i}>
+              <td>
+                <Tiles className="inline" tiles={r.discards} />
+              </td>
+              <td>
+                <Tiles className="inline" tiles={r.draws} />
+              </td>
+              <td className="route-hand">
+                {r.hand.map((p, j) => (
+                  <Tile key={j} pai={p} mark={j === win ? "hint" : null} />
+                ))}
+              </td>
+              <td className="yaku-list">
+                {r.yaku.length > 0
+                  ? r.yaku.map(([n, h]) => `${n}${h >= 13 ? "" : ` ${h}`}`).join("・")
+                  : "無役"}
+              </td>
+              <td className="pts">
+                {r.points > 0 ? (
+                  <>
+                    {r.points}
+                    <span className="muted">
+                      {r.limit ? ` ${r.limit}` : ` ${r.fu}符${r.han}番`}
+                      {r.riichi ? "（立直）" : ""}
+                    </span>
+                  </>
+                ) : (
+                  "—"
+                )}
+              </td>
+              <td className="pts">{Math.round((r.chance / total) * 100)}%</td>
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );

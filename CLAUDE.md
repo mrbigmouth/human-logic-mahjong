@@ -28,7 +28,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 |---|---|---|---|
 | M11 | 介面 | 牌桌介面改善：文字正置、四家點數、版面與可折疊面板、立直後自動摸切、音效、同種牌標示 | ✅ |
 | M12 | 介面 | 牌譜存取與檢視器：匯出、讀入（天鳳／mjai）、逐打檢視、讀入的牌譜可復盤 | ✅ |
-| M13 | 介面＋工具 | 和牌路線提示（`mj-tools` 的 `win_routes`） | |
+| M13 | 介面＋工具 | 和牌路線提示（`mj-tools` 的 `win_routes`） | ✅ |
 | M14 | 評估＋介面 | 反事實實驗：對局與復盤中比較各選項「之後依策略打」的結果 | |
 | M15 | 評估＋介面 | GUI 對戰測試平台：在 App 中執行 selfplay／simulate／場地對戰／預測評估，逐場檢視與實驗 | |
 | M16 | 開發流程 | 策略編輯流程：參數即時編輯＋監看原始碼自動重建重啟（已選定 A＋B） | |
@@ -101,7 +101,7 @@ Crate 相依鏈：`mj-core → mj-calc → mj-rules → mj-engine → mj-tools �
   - 玩家只拿得到 `PlayerView` 與遮蔽過的 `Event`，不能作弊。
   - 第 N 手牌山只由 `hand_seed(seed, N)` 決定（與打法無關）；`GameConfig.preset_walls` / `max_hands` 可指定牌山與手數。
   - `run_game_with` 借用玩家（對局後還能取回決策紀錄）；`keep_log` 時 `GameResult` 附完整事件紀錄與各局牌山。
-- **mj-tools**：給策略編輯者的**純計算**工具（不得包含「該怎麼打」的判斷）：動作後的向聽／進張、看得到的牌、現物／筋（片筋）／No Chance／One Chance、牌河的手切摸切與副露（`river`）、鳴牌後的役、點數估計、名次點差。新增工具時同步更新 `TOOLS.md`。
+- **mj-tools**：給策略編輯者的**純計算**工具（不得包含「該怎麼打」的判斷）：動作後的向聽／進張、看得到的牌、現物／筋（片筋）／No Chance／One Chance、牌河的手切摸切與副露（`river`）、鳴牌後的役、點數估計、名次點差、和牌路線（`routes`）。新增工具時同步更新 `TOOLS.md`。
 - **mj-strategy**：
   - `src/strategy-list/<規則>/<策略>/`：策略本體，給人編輯。第一層是規則，第二層是同規則下的各個策略，完整名稱「規則／策略」（例如 `tenhou-normal-4p-hanchan/push-fold`）。每個策略必須有 `README.md`（`# 標題`＋一段摘要＋特色，`Strategy::title/summary/readme` 讀取，供 `mj strategies` 與日後 GUI 選單顯示；改打法時同步更新）；規則目錄也有 `README.md`。`main.rs` 的 `register(&mut Book<Memory>)` 登記決策；`memory.rs` 的 `Memory`（需 `Default`）是整場共用的記憶，`observe` 由事件更新；`decision/*.rs` 每檔匯出一個 `decide(ctx, mem)`；`utils/predict/` 是預測函式。
   - `build.rs` 掃描 strategy-list，產生帶 `#[path]` 的模組樹、`all_strategies()` 與 `all_rules()`（`-` 轉成 `_`，README 以 `include_str!` 嵌入），由 `lib.rs` 的 `include!` 引入。新增檔案不需要寫 `mod`。同策略內互相引用用 `super::super::...`；檔案開頭 `use crate::prelude::*;`。

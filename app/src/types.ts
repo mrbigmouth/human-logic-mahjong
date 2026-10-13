@@ -130,6 +130,30 @@ export interface Hint {
   decisions: HintDecision[];
   /** 要打牌時，每種打法的牌效（由好到壞） */
   efficiency: Efficiency[];
+  /** 要打牌時，離和牌最近的幾條路線（向聽數 ≤ 2 時才有） */
+  routes: WinRoute[];
+}
+
+/** 一條和牌路線。 */
+export interface WinRoute {
+  /** 要打掉的牌（第一張是現在要打的） */
+  discards: string[];
+  /** 還要摸到的牌 */
+  draws: string[];
+  /** 和了時的門前手牌（含和牌張） */
+  hand: string[];
+  win_tile: string;
+  /** 役（名稱、番數）；無役時為空 */
+  yaku: [string, number][];
+  han: number;
+  fu: number;
+  limit: string;
+  /** 榮和點數（無役為 0） */
+  points: number;
+  /** 點數假設立直 */
+  riichi: boolean;
+  /** 相對機會 */
+  chance: number;
 }
 
 export interface Ask {

@@ -153,7 +153,37 @@ pub struct Hint {
     pub decisions: Vec<HintDecision>,
     /// 要打牌時，每種打法的牌效（由好到壞）
     pub efficiency: Vec<Efficiency>,
+    /// 要打牌時，離和牌最近的幾條路線（向聽數 ≤ 2 時才有；見 `mj_tools::routes`）
+    pub routes: Vec<RouteView>,
 }
+
+/// 一條和牌路線（給 UI）。
+#[derive(Debug, Clone, Serialize)]
+pub struct RouteView {
+    /// 要打掉的牌（第一張是現在要打的）
+    pub discards: Vec<String>,
+    /// 還要摸到的牌
+    pub draws: Vec<String>,
+    /// 和了時的門前手牌（含和牌張）
+    pub hand: Vec<String>,
+    /// 點數最高的和牌張
+    pub win_tile: String,
+    /// 役（名稱與番數）；無役時是空的
+    pub yaku: Vec<(String, u8)>,
+    pub han: u8,
+    pub fu: u8,
+    /// 滿貫、跳滿……
+    pub limit: String,
+    /// 榮和點數（無役為 0）
+    pub points: i32,
+    /// 點數假設立直
+    pub riichi: bool,
+    /// 相對機會（剩餘張數的組合數乘積）
+    pub chance: f64,
+}
+
+/// 提示列出的和牌路線條數。
+const HINT_ROUTES: usize = 6;
 
 /// 等待人類回答的詢問。
 #[derive(Debug, Clone, Serialize)]
@@ -267,12 +297,55 @@ impl HumanSeat {
         } else {
             Vec::new()
         };
+        let routes = if legal.iter().any(|a| matches!(a, Action::Discard { .. })) {
+            mj_tools::routes::win_routes(view, &view.hand, HINT_ROUTES)
+                .into_iter()
+                .filter(|r| r.discards.first().is_none_or(|&d| can_discard(d)))
+                .map(route_view)
+                .collect()
+        } else {
+            Vec::new()
+        };
         Some(Hint {
             action: index,
             label: action_view(0, &chosen).label,
             decisions,
             efficiency,
+            routes,
         })
+    }
+}
+
+fn route_view(r: mj_tools::routes::WinRoute) -> RouteView {
+    let names = |ts: &[mj_core::Tile]| ts.iter().map(|t| t.to_string()).collect();
+    RouteView {
+        discards: names(&r.discards),
+        draws: names(&r.draws),
+        hand: names(&r.hand),
+        win_tile: r.win_tile.to_string(),
+        // 役之後列寶牌、赤寶牌（不含裏寶牌：和了前不知道），番數才對得起來。
+        yaku: r.score.as_ref().map_or(Vec::new(), |s| {
+            let mut v: Vec<(String, u8)> = s
+                .yaku
+                .iter()
+                .map(|(y, h)| (y.name_ja().to_string(), *h))
+                .collect();
+            for (name, n) in [("寶牌", s.dora), ("赤寶牌", s.aka)] {
+                if n > 0 {
+                    v.push((name.to_string(), n));
+                }
+            }
+            v
+        }),
+        han: r.score.as_ref().map_or(0, |s| s.han),
+        fu: r.score.as_ref().map_or(0, |s| s.fu),
+        limit: r
+            .score
+            .as_ref()
+            .map_or(String::new(), |s| crate::table::limit_name(s.limit)),
+        points: r.points,
+        riichi: r.assumes_riichi,
+        chance: r.chance,
     }
 }
 
