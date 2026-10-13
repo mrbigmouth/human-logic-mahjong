@@ -10,30 +10,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - 與使用者溝通、文件、**程式註解一律使用繁體中文**。
 - 函式與型別名稱多為日語羅馬拼音（shanten 向聽、ukeire 進張、kuikae 食替、furiten 振聽……），對照表在 `docs/05-glossary.md`。牌的記法：`m` 萬、`p` 筒、`s` 索、`z` 字（1z–7z = 東南西北白發中）、`0m/0p/0s` 赤五。
-- 設計文件：`docs/01`–`05`；里程碑與目前進度在 `docs/04-milestones.md`。
+- 設計文件：`docs/01`–`05`；里程碑與目前進度在 `docs/04-milestones.md`；已完成里程碑的紀錄與決策在 project-history skill。
 - 給策略編輯者的文件：`crates/mj-strategy/TOOLS.md`（目錄寫法、決策函式、工具清單）與 `crates/mj-strategy/DATA.md`（`Ctx`、`PlayerView`、`Event` 等所有資料結構）。修改這些結構或新增工具時要同步更新。
 
 ## 里程碑
 
-詳細內容、驗收條件與各里程碑的完成紀錄在 `docs/04-milestones.md`（以它為準）。完成一個里程碑時：
-把狀態改為 ✅、在 docs/04 新增「完成內容」與驗收數據，並同步更新下表。
+現行計畫與驗收條件在 `docs/04-milestones.md`（以它為準）。完成一個里程碑時：
+把狀態改為 ✅、在 docs/04 寫下完成內容與驗收數據，並同步更新下表；
+之後的計畫調整時，把已完成的紀錄移到 project-history skill。
 
-M2.5 重構後的開發循環是「寫判斷 → 評估（預測看準確度、決策看反事實期望值）→ 讀損失最大的例子與理由 → 修改」，
-所以排序原則是：評估工具先行、共用的牌譜匯入提早、復盤（CLI／JSON）先於桌面 App。
-標「策略」的里程碑主要是在 `strategy-list` 寫判斷（使用者可能親自編寫），其餘提供工具、預測種類與評估方式。
+**M0–M10 已完成**（引擎、`hand-reading` 策略、兩種評估、牌譜匯入、復盤、可調參數、mjai／Mortal、練習 App、印象操作）。
+需要當時的完成內容、驗收數據、設計決策或否決過的做法時，使用 **project-history skill**（`.claude/skills/project-history/`）。
+
+2026-10-13 重新規劃：**策略編輯的便利性與 UI／UX 優先，其他麻將規則延後**；依難度排序，前一項是後一項的基礎。
 
 | # | 類型 | 內容 | 狀態 |
 |---|---|---|---|
-| M0–M2 | 基礎／策略 | 骨架、規則引擎（與 Python `mahjong` 零差異）、第一個牌效 AI | ✅ |
-| M2.5 | 基礎 | 策略架構重構：`mj-tools`、`strategy-list`、決策函式、記憶、`predict-eval`、`evaluate` | ✅ |
-| M3 | 評估 | 局面快照與重抽（去除全知）、名次點、自動加重打、依情境分組的報告與 JSON、`mj simulate`（duplicate）、常駐預測 | ✅ |
-| M4 | 資料 | 天鳳牌譜匯入（`mj-paifu`）→ 引擎重播並比對點數 → 事件紀錄與每個決策點的 `PlayerView`；對人類牌譜做預測評估 | ✅ |
-| M5 | 策略 | 押引（和牌機率 × 價值 − 放銃機率 × 對手打點）、`predict::win`、立直或默聽、鳴牌時機、保留寶牌 | ✅ |
-| M6 | 策略 | 讀牌：聽牌、聽牌張、打點預測（手切摸切、牌河順序、副露），以天鳳牌譜校準（`hand-reading`） | ✅ |
-| M7 | 產品 | 復盤（CLI／JSON）：使用者牌譜逐手比對，附策略理由與反事實期望值、失誤統計（`mj review`） | ✅ |
-| M8 | 評估 | 具名可調參數與自動調整（`mj tune`）；mjai 介接（`mj-mjai`）；與強 AI（Mortal）對戰與一致率（`mj agree`） | ✅ |
-| M9 | 產品 | Tauri 桌面練習 App（人機對戰、即時提示、對局後復盤）；`mj serve` | ✅ |
-| M10 | 策略 | 印象操作：用自己的讀牌模型看自己（手切摸切、迷彩）；反詐騙（流局對照）；`simulate --field`、`predict-eval --seats` | ✅ |
+| M11 | 介面 | 牌桌介面改善：文字正置、四家點數、版面與可折疊面板、立直後自動摸切、音效、同種牌標示 | |
+| M12 | 介面 | 牌譜存取與檢視器：匯出、讀入（天鳳／mjai）、逐打檢視、讀入的牌譜可復盤 | |
+| M13 | 介面＋工具 | 和牌路線提示（`mj-tools` 的 `win_routes`） | |
+| M14 | 評估＋介面 | 反事實實驗：對局與復盤中比較各選項「之後依策略打」的結果 | |
+| M15 | 評估＋介面 | GUI 對戰測試平台：在 App 中執行 selfplay／simulate／場地對戰／預測評估，逐場檢視與實驗 | |
+| M16 | 開發流程 | 策略編輯流程：參數即時編輯＋監看原始碼自動重建重啟（已選定 A＋B） | |
+
+GUI 的功能一律經由 `mj-app` 的 `App::call`，計算核心與 CLI 共用（在 `mj-sim`、`mj-review`）；
+查策略一律透過參賽者登錄（`find_strategy_spec`、`entrants()`），讓 M16 的參數編輯與重建能直接接上。
 
 ## 常用指令
 

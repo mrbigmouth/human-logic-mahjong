@@ -19,7 +19,7 @@
 | [docs/03-strategy-model.md](docs/03-strategy-model.md) | 策略模型：決策函式、對局記憶、預測與決策的兩種評分 |
 | [crates/mj-strategy/TOOLS.md](crates/mj-strategy/TOOLS.md) | **策略編輯者工具手冊**：目錄寫法、決策函式、全部工具 |
 | [crates/mj-strategy/DATA.md](crates/mj-strategy/DATA.md) | **策略編輯者資料結構說明**：`Ctx`、`PlayerView`、牌河、副露、`Event`、`Claim`、計分 |
-| [docs/04-milestones.md](docs/04-milestones.md) | 里程碑 M0–M10 與驗收條件 |
+| [docs/04-milestones.md](docs/04-milestones.md) | 里程碑：M0–M10 已完成（紀錄在 `.claude/skills/project-history/`），M11–M16 規劃中 |
 | [docs/05-glossary.md](docs/05-glossary.md) | 術語對照表：程式中的日語拼音名稱、牌的記法（m 萬、p 筒、s 索、z 字）、役種中文名 |
 
 ## 快速開始
