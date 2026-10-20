@@ -560,6 +560,7 @@ select option {
 }
 .panel-body {
   height: 24vh;
+  transition: height 0.15s;
   overflow: auto;
   padding: 6px 14px 10px;
   border-top: 1px solid #333c47;
@@ -962,4 +963,71 @@ button.small {
 .routes .yaku-list {
   white-space: normal;
   max-width: 260px;
+}
+
+/* ---------- 反事實實驗（M14） ---------- */
+.experiment h3 {
+  margin: 0;
+}
+.exp-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.exp-head .muted {
+  font-weight: normal;
+  font-size: 13px;
+  margin-left: 10px;
+}
+.exp-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 6px 0;
+}
+.exp-options label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.exp-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin: 8px 0;
+}
+.exp-controls label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.exp-results {
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.exp-results th {
+  text-align: left;
+  color: var(--muted);
+  font-weight: normal;
+  padding: 2px 14px 4px 0;
+}
+.exp-results td {
+  padding: 3px 14px 3px 0;
+  border-bottom: 1px solid #333c47;
+  white-space: nowrap;
+}
+.exp-results .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.exp-results tr.strategy td:first-child {
+  font-weight: bold;
+}
+.hint .decision .kind .small {
+  margin-left: 10px;
+}
+/* 實驗分頁的結果表格較長，面板拉高（牌桌會依空間自動縮小） */
+.panel-body.tall {
+  height: 45vh;
 }

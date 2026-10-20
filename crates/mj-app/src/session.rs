@@ -1,6 +1,7 @@
 //! 對局 session：人類一個座位、其餘座位是 AI。對局在背景執行緒進行，輪到人類時暫停，
 //! 等 UI 送來動作（[`Session::act`]）。UI 以 [`Session::poll`] 取得新的事件幀與目前的詢問。
 
+use crate::experiment::{ActionLog, Prepared, Recorder, snapshot_from_actions};
 use crate::paifu::{LogMeta, with_meta};
 use crate::review::ReviewJob;
 pub use crate::review::{ReviewConfig, ReviewState};
@@ -127,6 +128,8 @@ pub fn action_view(index: usize, a: &Action) -> ActionView {
 pub struct HintDecision {
     /// 決策種類，例如「何切」「立直與否」
     pub kind: String,
+    /// 決策種類的代號（反事實實驗指定決策時用）
+    pub kind_key: mj_strategy::framework::DecisionKind,
     pub options: Vec<String>,
     pub chosen: usize,
     /// 決策函式寫下的理由
@@ -230,6 +233,8 @@ struct State {
     error: Option<String>,
     /// 完整事件紀錄（對局結束後才有）
     log: Vec<Event>,
+    /// 人類每次被詢問時的視角（索引 = 第幾次詢問）；反事實實驗用來確認重播到的局面相同
+    views: Vec<PlayerView>,
 }
 
 #[derive(Default)]
@@ -271,6 +276,7 @@ impl HumanSeat {
             .into_iter()
             .map(|r| HintDecision {
                 kind: r.kind.name().to_string(),
+                kind_key: r.kind,
                 options: r.options,
                 chosen: r.chosen,
                 notes: r.notes,
@@ -396,6 +402,7 @@ impl Player for HumanSeat {
         // 提示策略一律要經過每次詢問（它的記憶與詢問次數才會正確）。
         self.check_table(view);
         let frame = self.shared.lock().frames.len();
+        self.shared.update(|s| s.views.push(view.clone()));
         let hint = self.hint(view, legal);
         if self.abandoned {
             return auto_action(legal);
@@ -467,6 +474,10 @@ pub struct Session {
     shared: Arc<Shared>,
     actions: Sender<Action>,
     review: ReviewJob,
+    /// 對局設定（重播用）
+    cfg: GameConfig,
+    /// 四家到目前為止的動作
+    history: ActionLog,
 }
 
 impl Session {
@@ -494,27 +505,35 @@ impl Session {
         let shared = Arc::new(Shared::default());
         let (tx, rx) = channel();
         let mut rx = Some(rx);
+        let actions: ActionLog = Arc::default();
         let mut players: Vec<Box<dyn Player + Send>> = Vec::with_capacity(4);
         for s in 0..4u8 {
-            if s == me {
-                players.push(Box::new(HumanSeat {
+            let inner: Box<dyn Player + Send> = if s == me {
+                Box::new(HumanSeat {
                     shared: shared.clone(),
                     actions: rx.take().expect("one human seat"),
                     builder: TableBuilder::new(me),
                     hint: strategy.player(true, None),
                     abandoned: false,
                     auto_pending: false,
-                }));
+                })
             } else {
-                players.push(make_ai(
+                make_ai(
                     &names[usize::from(s)],
                     seed.wrapping_mul(31).wrapping_add(u64::from(s)),
                     &names,
-                )?);
-            }
+                )?
+            };
+            // 記下每個動作：反事實實驗照紀錄重播到任一時刻。
+            players.push(Box::new(Recorder {
+                inner,
+                seat: s,
+                log: actions.clone(),
+            }));
         }
         let mut cfg = GameConfig::new(RiichiConfig::TENHOU, seed);
         cfg.max_hands = config.max_hands;
+        let game_cfg = cfg.clone();
         let sh = shared.clone();
         std::thread::Builder::new()
             .name("mj-session".into())
@@ -547,6 +566,8 @@ impl Session {
             shared,
             actions: tx,
             review: ReviewJob::default(),
+            cfg: game_cfg,
+            history: actions,
         })
     }
 
@@ -638,6 +659,34 @@ impl Session {
         );
         let lines: Vec<String> = events.iter().map(|v| v.to_string()).collect();
         Some(lines.join("\n") + "\n")
+    }
+
+    /// 反事實實驗用：「即將第 `ask_index` 次詢問人類」時的快照與四家旁觀的策略玩家（照動作紀錄重播）。
+    /// 回傳一個在背景執行緒中計算的函式。
+    pub fn snapshot_job(
+        &self,
+        ask_index: u32,
+    ) -> impl FnOnce() -> Result<Prepared, String> + Send + 'static {
+        let cfg = self.cfg.clone();
+        let actions = self
+            .history
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let strategy = self.strategy.clone();
+        let me = self.me();
+        let expected = self.shared.lock().views.get(ask_index as usize).cloned();
+        move || {
+            let expected = expected.ok_or("還沒有這次詢問")?;
+            let (snap, base) = snapshot_from_actions(&cfg, &actions, &strategy, me, ask_index)?;
+            // 重播到的局面必須和當時看到的一樣（否則代表重播走了另一條路）。
+            let same =
+                serde_json::to_value(snap.view()).ok() == serde_json::to_value(&expected).ok();
+            if !same {
+                return Err("重播到的局面與對局不一致".into());
+            }
+            Ok((snap, base))
+        }
     }
 
     /// 座位的稱呼（相對於人類）。

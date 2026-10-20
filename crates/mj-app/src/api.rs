@@ -16,9 +16,13 @@
 //! | `log_frames` | `{ seat, open }` | [`LogFrames`](crate::LogFrames)：該座位視角的全部幀；`open` = 公開四家手牌 |
 //! | `start_log_review` | `{ seat, strategy?, ...ReviewConfig }` | `null`：復盤讀入的牌譜（策略預設為牌譜記載的提示策略） |
 //! | `log_review` | `{ seat }` | 這個座位的 [`ReviewState`](crate::ReviewState) |
+//! | `start_experiment` | [`ExperimentRequest`] | `null`：反事實實驗（對局中或讀入的牌譜；開始新的會取消舊的） |
+//! | `experiment` | — | [`ExperimentState`](crate::ExperimentState)（進度或結果） |
+//! | `cancel_experiment` | — | `null`：停止實驗，以已完成的世界計算結果 |
 
+use crate::experiment::{ExperimentJob, ExperimentRequest};
 use crate::paifu::LoadedLog;
-use crate::session::{DEFAULT_STRATEGY, ReviewConfig, Session, SessionConfig};
+use crate::session::{ReviewConfig, Session, SessionConfig};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
@@ -32,6 +36,7 @@ const MAX_WAIT: Duration = Duration::from_secs(30);
 pub struct App {
     session: Mutex<Option<Arc<Session>>>,
     loaded: Mutex<Option<Arc<LoadedLog>>>,
+    experiment: ExperimentJob,
 }
 
 #[derive(Deserialize)]
@@ -156,6 +161,7 @@ impl App {
             "new_game" => {
                 let cfg: SessionConfig = args(params)?;
                 let s = Session::start(cfg)?;
+                self.experiment.reset();
                 let out = json!({ "seed": s.seed, "seat": s.me(), "names": s.names });
                 // 舊的對局被丟棄：若還在等人類的動作，會自動打完並結束。
                 *self.session.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(s));
@@ -187,6 +193,7 @@ impl App {
                 let id = a.name.rsplit(['/', '\\']).next().unwrap_or_default();
                 let id = id.rsplit_once('.').map_or(id, |(stem, _)| stem);
                 let log = LoadedLog::parse(&a.text, id)?;
+                self.experiment.reset();
                 let info = log.info();
                 *self.loaded.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(log));
                 to_json(&info)
@@ -199,16 +206,40 @@ impl App {
             "start_log_review" => {
                 let a: LogReviewArgs = args(params)?;
                 let log = self.loaded()?;
-                let strategy = a
-                    .strategy
-                    .or_else(|| log.meta.as_ref().and_then(|m| m.strategy.clone()))
-                    .unwrap_or_else(|| DEFAULT_STRATEGY.to_string());
+                let strategy = log.strategy_name(a.strategy);
                 log.start_review(a.seat, &strategy, &a.config)?;
                 Ok(Value::Null)
             }
             "log_review" => {
                 let a: SeatArgs = args(params)?;
                 to_json(&self.loaded()?.review(a.seat))
+            }
+            "start_experiment" => {
+                let req: ExperimentRequest = args(params)?;
+                let ask_index = req.ask.saturating_sub(1) as u32;
+                match req.source.as_str() {
+                    "game" => {
+                        let s = self.current()?;
+                        self.experiment
+                            .start(&req, s.me(), s.snapshot_job(ask_index))?;
+                    }
+                    "log" => {
+                        let log = self.loaded()?;
+                        let seat = req.seat.ok_or("要指定座位")?;
+                        let name = log.strategy_name(req.strategy.clone());
+                        let st: Arc<dyn mj_strategy::framework::Strategy> =
+                            Arc::from(mj_strategy::find_strategy_spec(&name)?);
+                        self.experiment
+                            .start(&req, seat, log.snapshot_job(seat, ask_index, st))?;
+                    }
+                    s => return Err(format!("不認得的來源 {s}（game 或 log）")),
+                }
+                Ok(Value::Null)
+            }
+            "experiment" => to_json(&self.experiment.state()),
+            "cancel_experiment" => {
+                self.experiment.cancel();
+                Ok(Value::Null)
             }
             _ => Err(format!("沒有這個 API：{name}")),
         }

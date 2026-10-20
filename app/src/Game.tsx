@@ -3,10 +3,22 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { call, saveText } from "./api";
 import { Board, Meld, REL_NAMES, WINDS, relative, shortName } from "./Board";
+import { Experiment } from "./Experiment";
 import { useBoardSize } from "./layout";
 import { play, type SoundKind } from "./sounds";
 import { Tile, TileText, Tiles } from "./Tile";
-import type { ActionView, Ask, EventView, Frame, GameOver, NewGame, TableView, Update, WinRoute } from "./types";
+import type {
+  ActionView,
+  Ask,
+  EventView,
+  ExperimentTarget,
+  Frame,
+  GameOver,
+  NewGame,
+  TableView,
+  Update,
+  WinRoute,
+} from "./types";
 
 interface Props {
   game: NewGame;
@@ -46,6 +58,7 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
   const [volume, setVolume] = useState(() => Number(localStorage.getItem("volume") ?? 0.6));
   const [panelOpen, setPanelOpen] = useState(() => localStorage.getItem("panel") !== "closed");
   const [tab, setTab] = useState<Tab>(() => (localStorage.getItem("tab") as Tab | null) ?? "hint");
+  const [expTarget, setExpTarget] = useState<ExperimentTarget | null>(null);
   const area = useRef<HTMLDivElement>(null);
   const handArea = useRef<HTMLDivElement>(null);
   const boardSize = useBoardSize(area, handArea, frames.length > 0);
@@ -151,6 +164,7 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
     ["hint", "提示", hint !== null],
     ["efficiency", "牌效", hint !== null && hint.efficiency.length > 0],
     ["routes", "和牌路線", hint !== null && hint.routes.length > 0],
+    ["experiment", "實驗", false],
     ["log", "紀錄", false],
     ["info", "對局資訊", false],
   ];
@@ -224,10 +238,23 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
           </div>
         </div>
         {panelOpen && (
-          <div className="panel-body">
+          <div className={`panel-body ${tab === "experiment" ? "tall" : ""}`}>
             {tab === "hint" &&
               (hint ? (
-                <HintPanel hint={hint} />
+                <HintPanel
+                  hint={hint}
+                  onExperiment={(d) => {
+                    if (!activeAsk) return;
+                    setExpTarget({
+                      source: "game",
+                      ask: activeAsk.id,
+                      kind: d.kind_key,
+                      options: d.options,
+                      reference: d.chosen,
+                    });
+                    setTab("experiment");
+                  }}
+                />
               ) : (
                 <div className="muted">
                   {activeAsk ? "輪到你了（即時提示已關閉）" : "輪到你時，這裡會顯示策略的選擇與理由。"}
@@ -244,6 +271,14 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
                 <RoutesTable routes={hint.routes} />
               ) : (
                 <div className="muted">輪到你打牌、離聽牌 2 向聽以內時，這裡會列出最近的和牌形、還要摸哪些牌與預估點數。</div>
+              ))}
+            {tab === "experiment" &&
+              (expTarget ? (
+                <Experiment target={expTarget} />
+              ) : (
+                <div className="muted">
+                  在「提示」分頁的決策旁按「實驗」：比較這個選擇的各選項，之後四家都依策略打完的平均結果、和了率與放銃率。
+                </div>
               ))}
             {tab === "log" && (
               <div className="log">
@@ -291,7 +326,7 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
   );
 }
 
-type Tab = "hint" | "efficiency" | "routes" | "log" | "info";
+type Tab = "hint" | "efficiency" | "routes" | "experiment" | "log" | "info";
 
 /** 播放到這一幀時的音效。 */
 function soundFor(ev: EventView): SoundKind | null {
@@ -399,7 +434,13 @@ export function Hand({ table, ask, riichiMode, setRiichiMode, hint, onAct }: Han
   );
 }
 
-function HintPanel({ hint }: { hint: NonNullable<Ask["hint"]> }) {
+function HintPanel({
+  hint,
+  onExperiment,
+}: {
+  hint: NonNullable<Ask["hint"]>;
+  onExperiment: (d: NonNullable<Ask["hint"]>["decisions"][number]) => void;
+}) {
   return (
     <div className="hint">
       <h3>
@@ -411,6 +452,11 @@ function HintPanel({ hint }: { hint: NonNullable<Ask["hint"]> }) {
           <div key={i} className="decision">
             <div className="kind">
               【{d.kind}】<TileText text={d.options[d.chosen] ?? ""} />
+              {d.options.length > 1 && (
+                <button className="small" onClick={() => onExperiment(d)} title="比較各選項之後依策略打的結果">
+                  實驗
+                </button>
+              )}
             </div>
             <ul>
               {d.notes.map((n, j) => (

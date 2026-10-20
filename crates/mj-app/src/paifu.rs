@@ -134,6 +134,39 @@ impl LoadedLog {
         self.reviews[usize::from(seat)].start(st, self.record.clone(), seat, rc)
     }
 
+    /// 反事實實驗用：「即將第 `ask_index` 次詢問 `seat`」時的快照與四家旁觀的策略玩家。
+    pub fn snapshot_job(
+        self: &Arc<Self>,
+        seat: Seat,
+        ask_index: u32,
+        strategy: Arc<dyn mj_strategy::framework::Strategy>,
+    ) -> impl FnOnce() -> Result<crate::experiment::Prepared, String> + Send + 'static {
+        let log = self.clone();
+        move || {
+            let mut shadows: Vec<Box<dyn mj_strategy::framework::StrategyPlayer>> =
+                (0..4).map(|_| strategy.player(false, None)).collect();
+            let snap = {
+                let refs: [Option<&mut dyn mj_engine::Player>; 4] = {
+                    let mut it = shadows
+                        .iter_mut()
+                        .map(|p| Some(p.as_mut() as &mut dyn mj_engine::Player));
+                    std::array::from_fn(|_| it.next().unwrap())
+                };
+                mj_paifu::replay::capture(&log.record, refs, seat, ask_index)?
+                    .ok_or("這個時點不能保存局面（例如搶槓）")?
+                    .1
+            };
+            Ok((snap, shadows))
+        }
+    }
+
+    /// 重打用的策略：指定的，或牌譜記載的提示策略，或預設策略。
+    pub fn strategy_name(&self, given: Option<String>) -> String {
+        given
+            .or_else(|| self.meta.as_ref().and_then(|m| m.strategy.clone()))
+            .unwrap_or_else(|| crate::session::DEFAULT_STRATEGY.to_string())
+    }
+
     /// `seat` 的復盤狀態。
     pub fn review(&self, seat: Seat) -> ReviewState {
         self.reviews

@@ -3,12 +3,14 @@
 //! 與 UI 無關：桌面版（Tauri command）與開發用的 `mj serve`（HTTP）都呼叫這裡。
 
 pub mod api;
+pub mod experiment;
 pub mod paifu;
 pub mod review;
 pub mod session;
 pub mod table;
 
 pub use api::App;
+pub use experiment::{ExperimentRequest, ExperimentState};
 pub use paifu::{LoadedLog, LogFrames, LogInfo, LogMeta};
 pub use session::{Ask, GameOver, Hint, ReviewConfig, ReviewState, Session, SessionConfig, Update};
 pub use table::{EventView, Frame, TableView, log_frames, table_mismatch};

@@ -112,6 +112,8 @@ export interface ActionView {
 
 export interface HintDecision {
   kind: string;
+  /** 決策種類的代號（實驗用） */
+  kind_key: DecisionKind;
   options: string[];
   chosen: number;
   notes: string[];
@@ -299,3 +301,48 @@ export interface LogFrames {
   frames: Frame[];
   asks: [number, number][];
 }
+
+/** 反事實實驗的對象：哪一次詢問的哪個決策。 */
+export interface ExperimentTarget {
+  source: "game" | "log";
+  /** 讀入的牌譜：哪一家 */
+  seat?: Seat;
+  /** 詢問編號（第幾次詢問 + 1） */
+  ask: number;
+  kind: DecisionKind;
+  options: string[];
+  /** 策略的選擇（比較基準） */
+  reference: number;
+  /** 玩家的選擇（復盤時） */
+  player?: number;
+}
+
+/** 一個選項的實驗結果。 */
+export interface OptionStats {
+  option: number;
+  mean: number;
+  se: number;
+  diff: number;
+  diff_se: number;
+  win_rate: number;
+  deal_in_rate: number;
+  avg_rank: number | null;
+}
+
+export type ExperimentState =
+  | { state: "idle" }
+  | { state: "running"; done: number; total: number; seconds: number }
+  | {
+      state: "done";
+      source: "game" | "log";
+      seat: Seat;
+      ask: number;
+      kind: DecisionKind;
+      reference: number;
+      metric: "points" | "placement";
+      worlds: number;
+      cancelled: boolean;
+      results: OptionStats[];
+      seconds: number;
+    }
+  | { state: "failed"; error: string };

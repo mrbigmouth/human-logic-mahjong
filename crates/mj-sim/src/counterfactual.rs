@@ -174,6 +174,184 @@ fn run_worlds(
     Ok(())
 }
 
+/// 實驗（M14）：在一個決策點，比較指定的幾個選項。每個選項強制選定後，四家都依策略打完。
+#[derive(Debug, Clone)]
+pub struct Experiment {
+    pub point: Point,
+    /// 要比較的選項（決策紀錄中的編號）
+    pub options: Vec<usize>,
+    /// 差值的比較基準（通常是策略的選擇；必須在 `options` 中）
+    pub reference: usize,
+    /// 世界數
+    pub worlds: usize,
+    pub metric: Metric,
+    /// 重抽看不到的牌（false = 用真實的牌，全知）
+    pub determinize: bool,
+    /// 各世界的亂數基準
+    pub seed: u64,
+}
+
+/// 一個選項的實驗結果。
+#[derive(Debug, Clone, Serialize)]
+pub struct OptionStats {
+    /// 選項編號
+    pub option: usize,
+    /// 平均結果（名次點或本局點數）與標準誤
+    pub mean: f64,
+    pub se: f64,
+    /// 與基準選項的平均差（同一組世界的成對差值）與標準誤
+    pub diff: f64,
+    pub diff_se: f64,
+    /// 本局和了率、放銃率
+    pub win_rate: f64,
+    pub deal_in_rate: f64,
+    /// 打到整場結束時的平均順位（1–4；只有名次點衡量時才有）
+    pub avg_rank: Option<f64>,
+}
+
+/// 一個世界中一個選項的結果：（衡量值, 本局和了, 本局放銃, 順位）。
+type Outcome = (f64, bool, bool, Option<u8>);
+/// 一個世界的工作：（世界的亂數, 每個選項一組四家的策略玩家）。
+type WorldJob = (u64, Vec<Vec<Box<dyn StrategyPlayer>>>);
+
+/// 執行實驗：各世界平行計算，`progress` 累計已完成的世界數；`cancel` 設為 true 時停止，
+/// 以已完成的世界計算結果。重播沒有走到決策點時回傳錯誤。
+pub fn run_experiment(
+    rules: &RiichiConfig,
+    snap: &Snapshot,
+    base: &[Box<dyn StrategyPlayer>],
+    exp: &Experiment,
+    progress: &std::sync::atomic::AtomicUsize,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<Vec<OptionStats>, String> {
+    use std::sync::atomic::Ordering;
+    if !exp.options.contains(&exp.reference) {
+        return Err("比較基準必須是要比較的選項之一".into());
+    }
+    if exp.options.iter().any(|&o| o >= exp.point.options) {
+        return Err("選項編號超出範圍".into());
+    }
+    let seat = usize::from(exp.point.seat);
+    let start_scores = snap.hand_start_scores();
+    // 策略玩家不能跨執行緒共用，先替每個世界、每個選項各複製一份。
+    let jobs: Vec<WorldJob> = (0..exp.worlds as u64)
+        .map(|w| {
+            let players = exp
+                .options
+                .iter()
+                .map(|_| base.iter().map(|p| p.clone_box()).collect())
+                .collect();
+            (exp.seed.wrapping_add(w), players)
+        })
+        .collect();
+    let results: Vec<Option<Result<Vec<Outcome>, String>>> = jobs
+        .into_par_iter()
+        .map(|(world_seed, per_option)| {
+            if cancel.load(Ordering::Relaxed) {
+                return None;
+            }
+            let mut world = snap.clone();
+            if exp.determinize {
+                world.determinize(&mut ChaCha8Rng::seed_from_u64(world_seed));
+            }
+            let cfg = GameConfig::new(rules.clone(), hand_seed(world_seed, 0x00C0_FFEE));
+            let until = match exp.metric {
+                Metric::Placement => Until::GameEnd,
+                Metric::Points => Until::HandEnd,
+            };
+            let mut out = Vec::new();
+            for (&option, mut ps) in exp.options.iter().zip(per_option) {
+                ps[seat].set_force(Some(Force {
+                    act_index: exp.point.act_index,
+                    kind: exp.point.kind,
+                    option,
+                }));
+                ps[seat].set_record(true);
+                let res = match resume_game(&cfg, &world, refs(&mut ps), true, until) {
+                    Ok(r) => r,
+                    Err(e) => return Some(Err(e.to_string())),
+                };
+                if !ps[seat].take_records().iter().any(|r| r.forced) {
+                    return Some(Err("重播沒有走到決策點".into()));
+                }
+                // 本局的結果：快照之後第一次「一局結束」的事件（雙響時可能有兩筆）。
+                let mut win = false;
+                let mut deal_in = false;
+                for e in &res.log {
+                    match e {
+                        mj_engine::Event::HandEnd {
+                            end: mj_engine::HandEnd::Win { winner, from, .. },
+                            ..
+                        } => {
+                            win |= usize::from(*winner) == seat;
+                            deal_in |= usize::from(*from) == seat && winner != from;
+                        }
+                        mj_engine::Event::EndKyoku { .. } => break,
+                        _ => {}
+                    }
+                }
+                let value = match exp.metric {
+                    Metric::Placement => {
+                        placement_points(rules, &res.scores, &res.ranks, seat as u8)
+                    }
+                    Metric::Points => f64::from(res.scores[seat] - start_scores[seat]),
+                };
+                let rank = (exp.metric == Metric::Placement).then(|| res.ranks[seat] + 1);
+                out.push((value, win, deal_in, rank));
+            }
+            progress.fetch_add(1, Ordering::Relaxed);
+            Some(Ok(out))
+        })
+        .collect();
+    let mut worlds: Vec<Vec<Outcome>> = Vec::new();
+    for r in results.into_iter().flatten() {
+        worlds.push(r?);
+    }
+    if worlds.is_empty() {
+        return Err("沒有完成任何世界".into());
+    }
+    let n = worlds.len() as f64;
+    let mean_se = |xs: &[f64]| {
+        let m = xs.iter().sum::<f64>() / n;
+        let var = xs.iter().map(|x| (x - m).powi(2)).sum::<f64>() / (n - 1.0).max(1.0);
+        (m, (var / n).sqrt())
+    };
+    let r = exp
+        .options
+        .iter()
+        .position(|&o| o == exp.reference)
+        .unwrap_or(0);
+    Ok(exp
+        .options
+        .iter()
+        .enumerate()
+        .map(|(i, &option)| {
+            let values: Vec<f64> = worlds.iter().map(|w| w[i].0).collect();
+            let diffs: Vec<f64> = worlds.iter().map(|w| w[i].0 - w[r].0).collect();
+            let (mean, se) = mean_se(&values);
+            let (diff, diff_se) = mean_se(&diffs);
+            let rate =
+                |f: fn(&Outcome) -> bool| worlds.iter().filter(|w| f(&w[i])).count() as f64 / n;
+            OptionStats {
+                option,
+                mean,
+                se,
+                diff,
+                diff_se,
+                win_rate: rate(|o| o.1),
+                deal_in_rate: rate(|o| o.2),
+                avg_rank: (exp.metric == Metric::Placement).then(|| {
+                    worlds
+                        .iter()
+                        .map(|w| f64::from(w[i].3.unwrap_or(0)))
+                        .sum::<f64>()
+                        / n
+                }),
+            }
+        })
+        .collect())
+}
+
 /// `a` 選項比 `b` 選項好多少（平均差）與標準誤，以同一組世界的成對差值計算。
 pub fn paired_diff(per_option: &[Vec<f64>], a: usize, b: usize) -> (f64, f64) {
     let diffs: Vec<f64> = per_option[a]

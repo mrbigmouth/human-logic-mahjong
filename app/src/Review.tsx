@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import { call } from "./api";
 import { Board, shortName } from "./Board";
+import { Experiment } from "./Experiment";
 import { Hand } from "./Game";
 import { TileText } from "./Tile";
 import {
@@ -95,6 +96,7 @@ export function Review({ info, seat, onView, onQuit }: Props) {
   }, [seat]);
   const [filter, setFilter] = useState<"diff" | "all">("diff");
   const [selected, setSelected] = useState<Reviewed | null>(null);
+  const [experimenting, setExperimenting] = useState(false);
 
   useEffect(() => {
     if (state.state !== "running") return;
@@ -202,7 +204,10 @@ export function Review({ info, seat, onView, onQuit }: Props) {
               <div
                 key={i}
                 className={`review-item ${v} ${selected === d ? "selected" : ""}`}
-                onClick={() => setSelected(d)}
+                onClick={() => {
+                  setSelected(d);
+                  setExperimenting(false);
+                }}
               >
                 <div className="where">
                   {d.round}　第 {d.turn} 巡　【{KIND_NAMES[d.kind]}】
@@ -275,6 +280,11 @@ export function Review({ info, seat, onView, onQuit }: Props) {
                   })}
                 </tbody>
               </table>
+              {!experimenting && (
+                <button onClick={() => setExperimenting(true)} title="比較各選項之後依策略打的結果">
+                  實驗：比較這個決策的選項
+                </button>
+              )}
               <h4>策略的理由</h4>
               <ul>
                 {selected.notes.map((n, j) => (
@@ -284,6 +294,22 @@ export function Review({ info, seat, onView, onQuit }: Props) {
                 ))}
               </ul>
             </div>
+            {experimenting && (
+              <div className="panel">
+                <Experiment
+                  target={{
+                    source: "log",
+                    seat,
+                    ask: selected.act_index + 1,
+                    kind: selected.kind,
+                    options: selected.options,
+                    reference: selected.strategy,
+                    player: selected.player,
+                  }}
+                  onClose={() => setExperimenting(false)}
+                />
+              </div>
+            )}
           </>
         ) : (
           <p className="muted">點選左邊的決策，查看當時的牌桌與策略的理由。</p>
