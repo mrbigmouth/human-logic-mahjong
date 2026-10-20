@@ -23,9 +23,11 @@ interface Props {
   onLoaded: (info: LogInfo) => void;
   /** 對戰測試頁 */
   onTests: () => void;
+  /** 策略參數頁 */
+  onParams: () => void;
 }
 
-export function Setup({ onStart, onLoaded, onTests }: Props) {
+export function Setup({ onStart, onLoaded, onTests, onParams }: Props) {
   const [entrants, setEntrants] = useState<StrategyInfo[]>([]);
   const [opponents, setOpponents] = useState<[string, string, string]>(() =>
     load("opponents", [DEFAULT, DEFAULT, DEFAULT]),
@@ -54,9 +56,19 @@ export function Setup({ onStart, onLoaded, onTests }: Props) {
     }
   };
 
+  // 上次沒打完的對局（服務重啟、關掉頁面）：可以接續。
+  const [saved, setSaved] = useState<{ seed: number; asks: number } | null>(null);
   useEffect(() => {
     call<StrategyInfo[]>("entrants").then(setEntrants, (e) => setError(String(e)));
+    call<{ seed: number; asks: number } | null>("saved_game").then(setSaved, () => setSaved(null));
   }, []);
+  const resume = async () => {
+    try {
+      onStart(await call<NewGame>("resume_game"));
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   const start = async () => {
     setStarting(true);
@@ -151,6 +163,11 @@ export function Setup({ onStart, onLoaded, onTests }: Props) {
         <button className="primary big" onClick={start} disabled={starting || validAdvisors.length === 0 || seedTooLarge}>
           開始對局
         </button>
+        {saved && (
+          <button className="big" onClick={resume} title="照保存的動作重打到上次的詢問，接著繼續">
+            繼續上次的對局（seed {saved.seed}）
+          </button>
+        )}
         <label className={`button big ${loading ? "disabled" : ""}`} title="天鳳牌譜（mjlog XML、JSON）或 mjai 牌譜（本 App 儲存的 .mjson）">
           {loading ? "讀入中…" : "讀入牌譜…"}
           <input
@@ -167,6 +184,9 @@ export function Setup({ onStart, onLoaded, onTests }: Props) {
         </label>
         <button className="big" onClick={onTests} title="策略、機器人、Mortal 大量對戰：勝率、每場的細節、實驗">
           對戰測試…
+        </button>
+        <button className="big" onClick={onParams} title="調整策略的可調參數，存成參數版本（不必編譯）">
+          策略參數…
         </button>
       </div>
     </div>

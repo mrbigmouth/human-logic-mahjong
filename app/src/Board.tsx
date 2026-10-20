@@ -14,6 +14,13 @@ export function relative(me: Seat, seat: number): number {
 
 /** 參賽者的短名稱：策略只取「規則／策略」的策略部分。 */
 export function shortName(name: string): string {
+  // 參數版本「策略@參數檔」→「策略@版本」；直接寫的覆寫「策略@名稱=值」→「策略@…」。
+  const at = name.indexOf("@");
+  if (at > 0 && !name.startsWith("mjai:")) {
+    const rest = name.slice(at + 1);
+    const variant = rest.includes("=") ? "…" : (rest.split(/[\\/]/).pop() ?? rest).replace(/\.params$/, "");
+    return `${shortName(name.slice(0, at))}@${variant}`;
+  }
   if (name.startsWith("mjai:")) {
     const last = name.trim().split(/\s+/).pop() ?? name;
     return name.includes("mortal") ? `Mortal ${last}` : last;

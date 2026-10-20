@@ -418,7 +418,7 @@ const PAGE = 50;
 
 interface ResultProps {
   id: string;
-  onOpenGame: (info: LogInfo) => void;
+  onOpenGame: (info: LogInfo, index: number) => void;
   onBack: () => void;
 }
 
@@ -458,7 +458,7 @@ export function TestResultView({ id, onOpenGame, onBack }: ResultProps) {
     setOpening(index);
     setError(null);
     try {
-      onOpenGame(await call<LogInfo>("open_test_game", { id, index }));
+      onOpenGame(await call<LogInfo>("open_test_game", { id, index }), index);
     } catch (e) {
       setError(String(e));
     } finally {

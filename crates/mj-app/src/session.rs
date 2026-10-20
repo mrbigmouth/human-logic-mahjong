@@ -14,6 +14,7 @@ use mj_rules::riichi::RiichiConfig;
 use mj_sim::entrant::EntrantSpec;
 use mj_strategy::framework::{DecisionRecord, Strategy, StrategyPlayer};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -266,6 +267,8 @@ struct State {
     log: Vec<Event>,
     /// 人類每次被詢問時的視角（索引 = 第幾次詢問）；反事實實驗用來確認重播到的局面相同
     views: Vec<PlayerView>,
+    /// session 已被丟棄（自動打完）：結束時不刪除保存檔（那已經是新對局的了）
+    abandoned: bool,
 }
 
 #[derive(Default)]
@@ -299,6 +302,77 @@ struct HumanSeat {
     abandoned: bool,
     /// 剛自動摸切：下一個自己的打牌幀標記為自動
     auto_pending: bool,
+    /// 接續對局（M16）：照紀錄自動回答的動作（之後才詢問 UI）
+    script: Vec<Action>,
+    next: usize,
+    /// 每次詢問前保存對局（設定與四家的動作），重啟後可以接續
+    save: Option<SaveTarget>,
+}
+
+/// 對局的保存處（`<資料目錄>/session.json`）。
+struct SaveTarget {
+    path: PathBuf,
+    config: SessionConfig,
+    history: ActionLog,
+}
+
+/// 保存的對局：設定（seed 已確定）與四家到目前為止的動作。重啟服務後照紀錄重打到同一個詢問，接著繼續。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedGame {
+    pub config: SessionConfig,
+    pub actions: [Vec<Action>; 4],
+}
+
+impl SaveTarget {
+    fn write(&self) {
+        let saved = SavedGame {
+            config: self.config.clone(),
+            actions: self
+                .history
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
+        };
+        if let Ok(text) = serde_json::to_string(&saved) {
+            if let Some(dir) = self.path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            // 先寫暫存檔再改名：服務在寫到一半時被重啟也不會留下壞掉的檔案。
+            let tmp = self.path.with_extension("json.tmp");
+            if std::fs::write(&tmp, text).is_ok() {
+                let _ = std::fs::rename(&tmp, &self.path);
+            }
+        }
+    }
+}
+
+/// 接續對局時的 AI 座位：照紀錄出牌（AI 仍收到同樣的事件與詢問，狀態接得上），紀錄用完後由 AI 自己打。
+/// 紀錄中的動作不合法時（引擎改過），之後都由 AI 自己打。
+struct Replay {
+    inner: Box<dyn Player + Send>,
+    script: Vec<Action>,
+    next: usize,
+}
+
+impl Player for Replay {
+    fn on_event(&mut self, me: Seat, event: &Event) {
+        self.inner.on_event(me, event);
+    }
+
+    fn act(&mut self, view: &PlayerView, legal: &[Action]) -> Action {
+        let own = self.inner.act(view, legal);
+        match self.script.get(self.next) {
+            Some(a) if legal.contains(a) => {
+                self.next += 1;
+                a.clone()
+            }
+            Some(_) => {
+                self.script.clear();
+                own
+            }
+            None => own,
+        }
+    }
 }
 
 impl HumanSeat {
@@ -509,6 +583,23 @@ impl Player for HumanSeat {
         if self.abandoned {
             return auto_action(legal);
         }
+        // 接續對局：照紀錄回答（詢問編號照樣遞增）；紀錄的動作不合法時改為詢問 UI。
+        if let Some(a) = self.script.get(self.next).cloned() {
+            if legal.contains(&a) {
+                self.next += 1;
+                if let [
+                    Action::Discard {
+                        tsumogiri: true, ..
+                    },
+                ] = legal
+                {
+                    self.auto_pending = true;
+                }
+                self.shared.update(|s| s.asks += 1);
+                return a;
+            }
+            self.script.clear();
+        }
         // 立直後只能摸切（不能自摸、不能暗槓）：自動打出，不詢問。
         // 詢問編號照樣遞增，維持「編號 − 1 = 第幾次詢問（act_index）」的對應（復盤用）。
         if let [
@@ -520,6 +611,9 @@ impl Player for HumanSeat {
             self.auto_pending = true;
             self.shared.update(|s| s.asks += 1);
             return a.clone();
+        }
+        if let Some(save) = &self.save {
+            save.write();
         }
         self.shared.update(|s| {
             s.asks += 1;
@@ -540,6 +634,7 @@ impl Player for HumanSeat {
             Ok(a) => a,
             Err(_) => {
                 self.abandoned = true;
+                self.shared.update(|s| s.abandoned = true);
                 auto_action(legal)
             }
         }
@@ -566,6 +661,15 @@ pub struct Session {
 impl Session {
     /// 開始一場對局（立即在背景執行緒開打）。
     pub fn start(config: SessionConfig) -> Result<Session, String> {
+        Session::start_with(config, None, None)
+    }
+
+    /// 開始一場對局。`resume` = 照紀錄接續（四家的動作）；`save` = 每次詢問人類前把對局保存到這個檔案（結束時刪除）。
+    pub fn start_with(
+        mut config: SessionConfig,
+        resume: Option<[Vec<Action>; 4]>,
+        save: Option<PathBuf>,
+    ) -> Result<Session, String> {
         if config.seat > 3 {
             return Err("座位必須是 0–3".into());
         }
@@ -576,6 +680,8 @@ impl Session {
                 // 限制在 53 位元內：前端（JavaScript 的數字）才能精確顯示並重新輸入。
                 .map_or(0, |d| d.as_nanos() as u64 & ((1 << 53) - 1))
         });
+        config.seed = Some(seed);
+        let mut resume = resume.unwrap_or_default();
         let me = config.seat;
         let names: [String; 4] = std::array::from_fn(|s| {
             let s = s as u8;
@@ -589,6 +695,7 @@ impl Session {
         let (tx, rx) = channel();
         let mut rx = Some(rx);
         let actions: ActionLog = Arc::default();
+        let save_path = save.clone();
         let mut players: Vec<Box<dyn Player + Send>> = Vec::with_capacity(4);
         for s in 0..4u8 {
             let inner: Box<dyn Player + Send> = if s == me {
@@ -612,10 +719,28 @@ impl Session {
                     advisors: advisors.infos(),
                     abandoned: false,
                     auto_pending: false,
+                    script: std::mem::take(&mut resume[usize::from(s)]),
+                    next: 0,
+                    save: save.as_ref().map(|path| SaveTarget {
+                        path: path.clone(),
+                        config: config.clone(),
+                        history: actions.clone(),
+                    }),
                 })
             } else {
                 // 參賽者登錄與對戰測試、CLI 共用（機器人的 seed 由對局 seed 與座位推導）。
-                EntrantSpec::parse(&names[usize::from(s)])?.try_player(seed, u64::from(s))?
+                let ai =
+                    EntrantSpec::parse(&names[usize::from(s)])?.try_player(seed, u64::from(s))?;
+                let script = std::mem::take(&mut resume[usize::from(s)]);
+                if script.is_empty() {
+                    ai
+                } else {
+                    Box::new(Replay {
+                        inner: ai,
+                        script,
+                        next: 0,
+                    })
+                }
             };
             // 記下每個動作：反事實實驗照紀錄重播到任一時刻。
             players.push(Box::new(Recorder {
@@ -638,6 +763,12 @@ impl Session {
                     .try_into()
                     .unwrap_or_else(|_| unreachable!("four seats"));
                 let r = run_game(&cfg, &mut players, true);
+                // 對局結束（或出錯）：不再需要接續。被丟棄的對局不刪（保存檔已經屬於新的對局）。
+                if let Some(p) = &save_path
+                    && !sh.lock().abandoned
+                {
+                    let _ = std::fs::remove_file(p);
+                }
                 sh.update(|s| match r {
                     Ok(r) => {
                         s.game_over = Some(GameOver {

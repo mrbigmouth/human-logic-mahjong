@@ -5,7 +5,9 @@
 //! |---|---|---|
 //! | `strategies` | — | 策略清單（`name`、`title`、`summary`、`kind`、`updated`；由新至舊） |
 //! | `entrants` | — | 可以上桌的對手：策略、內建機器人、已安裝的 Mortal（同上；`kind` = strategy／bot／mjai） |
-//! | `new_game` | [`SessionConfig`] | `{ seed, seat, names }` |
+//! | `new_game` | [`SessionConfig`] | `{ seed, seat, names, resumed }` |
+//! | `saved_game` | — | 上次沒打完的對局（`{ seed, seat, opponents, advisors, asks }`）或 `null`（M16） |
+//! | `resume_game` | — | 同 `new_game`：照保存的動作重打到上次的詢問，接著繼續（`mj dev` 重啟後回到對局） |
 //! | `poll` | `{ since, wait_ms }` | [`Update`](crate::Update)（長輪詢：沒有新東西時最多等 `wait_ms`） |
 //! | `act` | `{ ask, index }` | `null` |
 //! | `start_review` | [`ReviewConfig`] | `null` |
@@ -27,9 +29,13 @@
 //! | `test_games` | [`testbed::GamesQuery`](crate::testbed::GamesQuery) | [`testbed::GamePage`](crate::testbed::GamePage)：對局清單的一頁（可排序） |
 //! | `open_test_game` | `{ id, index }` | [`LogInfo`](crate::LogInfo)：把這一場讀入（重打或讀保存的牌譜），之後與 `load_log` 相同 |
 //! | `delete_test` | `{ id }` | `null` |
+//! | `params` | `{ strategy }` | `{ params, variants }`：策略的可調參數與已保存的參數版本（M16） |
+//! | `save_params` | `{ strategy, variant, values }` | [`Variant`](crate::params::Variant)：保存參數版本（之後開的對局、測試立即使用） |
+//! | `delete_params` | `{ strategy, variant }` | `null` |
 
 use crate::experiment::{ExperimentJob, ExperimentRequest};
 use crate::paifu::LoadedLog;
+use crate::params::{ParamStore, params_of};
 use crate::session::{ReviewConfig, Session, SessionConfig};
 use crate::testbed::{GamesQuery, TestRequest, Testbed};
 use serde::Deserialize;
@@ -46,6 +52,22 @@ pub struct App {
     loaded: Mutex<Option<Arc<LoadedLog>>>,
     experiment: ExperimentJob,
     testbed: Testbed,
+    params: ParamStore,
+    /// 對局的保存檔（`<資料目錄>/session.json`；每次詢問人類前寫入，結束時刪除）
+    session_file: Option<std::path::PathBuf>,
+}
+
+#[derive(Deserialize)]
+struct StrategyArgs {
+    strategy: String,
+}
+
+#[derive(Deserialize)]
+struct SaveParamsArgs {
+    strategy: String,
+    variant: String,
+    #[serde(default)]
+    values: std::collections::BTreeMap<String, f64>,
 }
 
 impl Default for App {
@@ -124,9 +146,11 @@ fn file_mtime(path: &str) -> Option<u64> {
     Some(t.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs())
 }
 
-/// 策略清單，附最後更新時間（`updated`，Unix 秒；原始碼還在時即時計算，見 `mj_strategy::framework::source`）。
-fn strategies() -> Vec<Value> {
-    mj_strategy::all_strategies()
+/// 策略清單與參數版本，附最後更新時間（`updated`，Unix 秒；原始碼還在時即時計算，見 `mj_strategy::framework::source`；
+/// 參數版本取原始碼與參數檔中較晚者）。
+fn strategies(store: &ParamStore) -> Vec<Value> {
+    let all = mj_strategy::all_strategies();
+    let mut out: Vec<Value> = all
         .iter()
         .map(|s| {
             json!({
@@ -134,7 +158,23 @@ fn strategies() -> Vec<Value> {
                 "kind": "strategy", "updated": s.updated(),
             })
         })
-        .collect()
+        .collect();
+    for v in store.all() {
+        let Some(s) = all.iter().find(|s| s.name() == v.strategy) else {
+            continue;
+        };
+        let values: Vec<String> = v.values.iter().map(|(k, x)| format!("{k}={x}")).collect();
+        out.push(json!({
+            "name": v.spec,
+            "title": format!("{}（@{}）", s.title(), v.name),
+            "summary": format!("{} 的參數版本：{}", s.name(), if values.is_empty() { "全部用預設值".into() } else { values.join("、") }),
+            "kind": "strategy",
+            "base": s.name(),
+            "variant": v.name,
+            "updated": s.updated().max(v.updated),
+        }));
+    }
+    out
 }
 
 /// 由新至舊排序（沒有時間的放最後，順序不變）。
@@ -145,8 +185,8 @@ fn newest_first(mut v: Vec<Value>) -> Vec<Value> {
 
 /// 可以上桌的對手。Mortal 只在從專案目錄執行、而且已用 `tools/mortal/setup.sh` 安裝時列出
 /// （更新時間是權重檔的時間）。
-fn entrants() -> Vec<Value> {
-    let mut out = strategies();
+fn entrants(store: &ParamStore) -> Vec<Value> {
+    let mut out = strategies(store);
     out.push(json!({
         "name": "greedy", "title": "貪婪機器人", "summary": "只看牌效，隨機鳴牌（很弱）",
         "kind": "bot", "updated": null,
@@ -193,8 +233,30 @@ impl App {
             session: Mutex::default(),
             loaded: Mutex::default(),
             experiment: ExperimentJob::default(),
-            testbed: Testbed::new(dir.map(|d| d.join("tests"))),
+            testbed: Testbed::new(dir.as_ref().map(|d| d.join("tests"))),
+            params: ParamStore::new(dir.as_ref().map(|d| d.join("params"))),
+            session_file: dir.map(|d| d.join("session.json")),
         }
+    }
+
+    /// 換成新的對局。
+    fn start_session(&self, s: Session, resumed: bool) -> Result<Value, String> {
+        self.experiment.reset();
+        let out = json!({ "seed": s.seed, "seat": s.me(), "names": s.names, "resumed": resumed });
+        // 舊的對局被丟棄：若還在等人類的動作，會自動打完並結束。
+        let old = self
+            .session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(Arc::new(s));
+        drop(old);
+        Ok(out)
+    }
+
+    /// 保存的（還沒打完的）對局。
+    fn saved_game(&self) -> Option<crate::session::SavedGame> {
+        let text = std::fs::read_to_string(self.session_file.as_ref()?).ok()?;
+        serde_json::from_str(&text).ok()
     }
 
     /// 讀入一份牌譜（取代之前的），清掉舊的實驗結果。
@@ -224,16 +286,43 @@ impl App {
     /// 執行一個 API 呼叫。
     pub fn call(&self, name: &str, params: Value) -> Result<Value, String> {
         match name {
-            "strategies" => Ok(Value::Array(newest_first(strategies()))),
-            "entrants" => Ok(Value::Array(entrants())),
+            "strategies" => Ok(Value::Array(newest_first(strategies(&self.params)))),
+            "entrants" => Ok(Value::Array(entrants(&self.params))),
+            "params" => {
+                let a: StrategyArgs = args(params)?;
+                Ok(json!({
+                    "params": params_of(&a.strategy)?,
+                    "variants": self.params.variants(&a.strategy),
+                }))
+            }
+            "save_params" => {
+                let a: SaveParamsArgs = args(params)?;
+                to_json(&self.params.save(&a.strategy, &a.variant, &a.values)?)
+            }
+            "delete_params" => {
+                let a: SaveParamsArgs = args(params)?;
+                self.params.delete(&a.strategy, &a.variant)?;
+                Ok(Value::Null)
+            }
             "new_game" => {
                 let cfg: SessionConfig = args(params)?;
-                let s = Session::start(cfg)?;
-                self.experiment.reset();
-                let out = json!({ "seed": s.seed, "seat": s.me(), "names": s.names });
-                // 舊的對局被丟棄：若還在等人類的動作，會自動打完並結束。
-                *self.session.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(s));
-                Ok(out)
+                self.start_session(
+                    Session::start_with(cfg, None, self.session_file.clone())?,
+                    false,
+                )
+            }
+            "saved_game" => Ok(match self.saved_game() {
+                Some(g) => json!({
+                    "seed": g.config.seed, "seat": g.config.seat, "opponents": g.config.opponents,
+                    "advisors": g.config.advisor_names(),
+                    "asks": g.actions[usize::from(g.config.seat)].len(),
+                }),
+                None => Value::Null,
+            }),
+            "resume_game" => {
+                let g = self.saved_game().ok_or("沒有保存的對局")?;
+                let s = Session::start_with(g.config, Some(g.actions), self.session_file.clone())?;
+                self.start_session(s, true)
             }
             "poll" => {
                 let a: PollArgs = args(params)?;

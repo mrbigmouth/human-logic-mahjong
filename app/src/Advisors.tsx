@@ -17,7 +17,8 @@ export function formatUpdated(ts: number | null): string {
 
 /** 選單中的名稱：標題（策略短名）・更新時間。 */
 export function optionLabel(c: StrategyInfo): string {
-  const short = c.kind === "strategy" ? `（${c.name.split("/").pop()}）` : "";
+  // 參數版本的名稱是「策略@參數檔路徑」：短名用原本的策略。
+  const short = c.kind === "strategy" ? `（${(c.base ?? c.name).split("/").pop()}）` : "";
   const when = c.updated !== null ? `　${c.kind === "mjai" ? "權重 " : ""}${formatUpdated(c.updated)}` : "";
   return `${c.title}${short}${when}`;
 }

@@ -42,3 +42,10 @@ codegen-units = 1
 inherits = "release"
 debug-assertions = true
 overflow-checks = true
+
+# mj dev 用的建置設定（M16）：接近 release 的速度，但不做 LTO、開啟增量編譯，改策略後重建較快。
+[profile.dev-fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true

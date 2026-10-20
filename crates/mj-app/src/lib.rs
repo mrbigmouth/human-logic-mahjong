@@ -6,6 +6,7 @@ pub mod advisor;
 pub mod api;
 pub mod experiment;
 pub mod paifu;
+pub mod params;
 pub mod review;
 pub mod session;
 pub mod table;

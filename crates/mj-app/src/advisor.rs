@@ -118,6 +118,13 @@ pub fn info(a: &Advisor) -> AdvisorInfo {
     let (title, ai) = match &a.kind {
         // 參數覆寫（`名稱@…`）附在標題後面，才分得出同一個策略的不同版本。
         AdvisorKind::Strategy(s) => match a.name.split_once('@') {
+            // 參數版本（`名稱@參數檔`）顯示檔名（版本名稱）。
+            Some((_, p)) if p.ends_with(".params") => {
+                let stem = std::path::Path::new(p)
+                    .file_stem()
+                    .map_or(p.into(), |s| s.to_string_lossy());
+                (format!("{}（@{stem}）", s.title()), false)
+            }
             Some((_, p)) => (format!("{}（@{p}）", s.title()), false),
             None => (s.title().to_string(), false),
         },

@@ -1,6 +1,7 @@
 //! 命令列工具 `mj`。每個子命令對應一個里程碑的功能；尚未實作的會提示預計在哪個里程碑完成。
 
 mod agree;
+mod dev;
 mod evaluate;
 mod import;
 mod nanikiru;
@@ -287,6 +288,23 @@ enum Command {
         #[arg(long, default_value = "data/app")]
         data: PathBuf,
     },
+    /// 策略編輯的開發模式（M16）：啟動練習 App，監看原始碼，存檔後自動重建、重啟，前端自動回到原本的畫面
+    Dev {
+        #[arg(long, default_value_t = 30100)]
+        port: u16,
+        #[arg(long, default_value = "0.0.0.0")]
+        host: String,
+        #[arg(long, default_value = "app/dist")]
+        dir: PathBuf,
+        #[arg(long, default_value = "data/app")]
+        data: PathBuf,
+        /// 建置設定（dev-fast：不做 LTO、增量編譯，重建約 2 秒；release 較慢但執行快一點）
+        #[arg(long, default_value = "dev-fast")]
+        profile: String,
+        /// 不監看前端（app/）
+        #[arg(long)]
+        no_frontend: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -554,6 +572,21 @@ fn main() -> ExitCode {
             dir,
             data,
         } => exit(serve::run(&host, port, &dir, &data)),
+        Command::Dev {
+            port,
+            host,
+            dir,
+            data,
+            profile,
+            no_frontend,
+        } => exit(dev::run(&dev::Options {
+            port,
+            host,
+            dir,
+            data,
+            profile,
+            no_frontend,
+        })),
     }
 }
 

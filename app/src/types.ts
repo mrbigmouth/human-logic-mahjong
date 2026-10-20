@@ -220,6 +220,9 @@ export interface StrategyInfo {
   kind: "strategy" | "bot" | "mjai";
   /** 最後更新時間（Unix 秒）；內建機器人沒有 */
   updated: number | null;
+  /** 參數版本：原本的策略與版本名稱 */
+  base?: string;
+  variant?: string;
 }
 
 export interface SessionConfig {
@@ -236,6 +239,8 @@ export interface NewGame {
   seed: number;
   seat: Seat;
   names: string[];
+  /** 接續保存的對局（mj dev 重啟後） */
+  resumed?: boolean;
 }
 
 export type DecisionKind = "Kyuushu" | "Win" | "Kan" | "Discard" | "Riichi" | "Call" | "Tedashi";

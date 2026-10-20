@@ -57,6 +57,9 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
   const [hold, setHold] = useState<number | null>(null); // 停在第幾幀（一局結果）
   const [released, setReleased] = useState<Set<number>>(new Set());
   const [riichiMode, setRiichiMode] = useState(false);
+  // 接續的對局（mj dev 重啟後）：核心照紀錄重打到上次的詢問；這段不播放，直接跳到最後。
+  const [catching, setCatching] = useState(!!game.resumed);
+  const catchingRef = useRef(!!game.resumed);
   const [hintMode, setHintMode] = useState<HintMode>(() => {
     const v = localStorage.getItem("hintMode");
     if (v === "off" || v === "block" || v === "live") return v;
@@ -102,6 +105,11 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
             setError(u.error);
             return;
           }
+          if ((u.ask || u.game_over) && catchingRef.current) {
+            catchingRef.current = false;
+            setPos(Math.max(0, u.next - 1));
+            setCatching(false);
+          }
           if (u.ask) {
             setAsk(u.ask);
             return;
@@ -126,7 +134,7 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
 
   // 播放：一幀一幀前進；遇到一局結果時停下等玩家按「繼續」。
   useEffect(() => {
-    if (hold !== null || pos >= frames.length - 1) return;
+    if (catching || hold !== null || pos >= frames.length - 1) return;
     const nextFrame = frames[pos + 1];
     const t = setTimeout(
       () => {
@@ -141,7 +149,7 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
       delayFor(nextFrame.event, game.seat, speed),
     );
     return () => clearTimeout(t);
-  }, [pos, frames, hold, speed, game.seat, released, volume]);
+  }, [pos, frames, hold, speed, game.seat, released, volume, catching]);
 
   const frame = frames[Math.min(pos, frames.length - 1)];
   // 詢問要等播放追上（看到的幀數 ≥ 詢問時的幀數）才顯示。
@@ -171,8 +179,8 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
 
   const finished = over !== null && pos >= frames.length - 1 && hold === null;
 
-  if (!frame) {
-    return <div className="loading">{error ?? "對局準備中…"}</div>;
+  if (!frame || catching) {
+    return <div className="loading">{error ?? (catching ? "接續對局中…" : "對局準備中…")}</div>;
   }
 
   const table = frame.table;
