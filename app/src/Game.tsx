@@ -3,17 +3,21 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { call, saveText } from "./api";
 import { Board, Meld, REL_NAMES, WINDS, relative, shortName } from "./Board";
+import { PolicyList } from "./Advisors";
 import { Experiment } from "./Experiment";
 import { useBoardSize } from "./layout";
 import { play, type SoundKind } from "./sounds";
 import { Tile, TileText, Tiles } from "./Tile";
 import type {
   ActionView,
+  Advice,
   Ask,
   EventView,
   ExperimentTarget,
   Frame,
   GameOver,
+  Hint,
+  HintDecision,
   NewGame,
   TableView,
   Update,
@@ -243,7 +247,7 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
               (hint ? (
                 <HintPanel
                   hint={hint}
-                  onExperiment={(d) => {
+                  onExperiment={(a, d) => {
                     if (!activeAsk) return;
                     setExpTarget({
                       source: "game",
@@ -251,13 +255,16 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
                       kind: d.kind_key,
                       options: d.options,
                       reference: d.chosen,
+                      referenceLabel: a.title,
+                      marks: otherPicks(hint, a, d),
+                      strategy: a.ai ? undefined : a.name,
                     });
                     setTab("experiment");
                   }}
                 />
               ) : (
                 <div className="muted">
-                  {activeAsk ? "輪到你了（即時提示已關閉）" : "輪到你時，這裡會顯示策略的選擇與理由。"}
+                  {activeAsk ? "輪到你了（即時提示已關閉）" : "輪到你時，這裡會顯示策略（與 AI）的選擇與理由。"}
                 </div>
               ))}
             {tab === "efficiency" &&
@@ -434,40 +441,56 @@ export function Hand({ table, ask, riichiMode, setRiichiMode, hint, onAct }: Han
   );
 }
 
-function HintPanel({
-  hint,
-  onExperiment,
-}: {
-  hint: NonNullable<Ask["hint"]>;
-  onExperiment: (d: NonNullable<Ask["hint"]>["decisions"][number]) => void;
-}) {
+/** 其他顧問在這個決策的選擇（實驗的結果表標示用）。 */
+function otherPicks(hint: Hint, a: Advice, d: HintDecision): [string, number][] {
+  const k = hint.advisors.indexOf(a);
+  return hint.advisors.flatMap((b, j) => {
+    const p = d.picks[j];
+    return j !== k && p !== null && p !== undefined ? [[b.title, p] as [string, number]] : [];
+  });
+}
+
+/** 各顧問的建議並排：策略列出決策與理由，AI 列出各動作的機率。 */
+function HintPanel({ hint, onExperiment }: { hint: Hint; onExperiment: (a: Advice, d: HintDecision) => void }) {
   return (
-    <div className="hint">
-      <h3>
-        提示：
-        <TileText text={hint.label} />
-      </h3>
-      <div className="decisions-grid">
-        {hint.decisions.map((d, i) => (
-          <div key={i} className="decision">
-            <div className="kind">
-              【{d.kind}】<TileText text={d.options[d.chosen] ?? ""} />
-              {d.options.length > 1 && (
-                <button className="small" onClick={() => onExperiment(d)} title="比較各選項之後依策略打的結果">
-                  實驗
-                </button>
-              )}
-            </div>
-            <ul>
-              {d.notes.map((n, j) => (
-                <li key={j}>
-                  <TileText text={n} />
-                </li>
-              ))}
-            </ul>
+    <div className="hint advisors-grid" style={{ "--n": hint.advisors.length } as CSSProperties}>
+      {hint.advisors.map((a, k) => (
+        <div key={a.name} className={`advice ${k === 0 ? "main" : ""}`}>
+          <h3>
+            <span className="advisor-name">{a.title}</span>
+            <TileText text={a.label} />
+          </h3>
+          {a.error && <div className="error-text">{a.error}</div>}
+          {a.ai && <PolicyList policy={a.policy} />}
+          <div className="decisions-grid">
+            {a.decisions.map((d, i) => (
+              <div key={i} className="decision">
+                <div className="kind">
+                  【{d.kind}】<TileText text={d.options[d.chosen] ?? ""} />
+                  {d.options.length > 1 && (
+                    <button
+                      className="small"
+                      onClick={() => onExperiment(a, d)}
+                      title="比較各選項之後依策略打的結果"
+                    >
+                      實驗
+                    </button>
+                  )}
+                </div>
+                {d.notes.length > 0 && (
+                  <ul>
+                    {d.notes.map((n, j) => (
+                      <li key={j}>
+                        <TileText text={n} />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
+        </div>
+      ))}
     </div>
   );
 }

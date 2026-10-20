@@ -117,6 +117,39 @@ export interface HintDecision {
   options: string[];
   chosen: number;
   notes: string[];
+  /** 每個顧問在這個決策的選擇（依 Hint.advisors；走了另一條路時為 null） */
+  picks: (number | null)[];
+}
+
+/** 顧問：提示與復盤時列出選擇的策略或 AI。 */
+export interface AdvisorInfo {
+  name: string;
+  title: string;
+  /** mjai AI（Mortal）：沒有理由，只有機率 */
+  ai: boolean;
+}
+
+/** AI 的一個動作的機率。 */
+export interface Prob {
+  label: string;
+  prob: number;
+}
+
+/** AI 在一次詢問中各動作的機率（Q 值的 softmax）。 */
+export interface Policy {
+  probs: Prob[];
+  /** 選了立直時：立直後打哪張 */
+  riichi: Prob[];
+}
+
+/** 一個顧問在這次詢問的建議。 */
+export interface Advice extends AdvisorInfo {
+  action: number | null;
+  label: string;
+  /** 策略：自己的決策與理由；AI：基礎策略的決策結構，chosen 是 AI 的選擇 */
+  decisions: HintDecision[];
+  policy: Policy | null;
+  error: string | null;
 }
 
 export interface Efficiency {
@@ -127,9 +160,10 @@ export interface Efficiency {
 }
 
 export interface Hint {
+  /** 第一個顧問的選擇 */
   action: number | null;
   label: string;
-  decisions: HintDecision[];
+  advisors: Advice[];
   /** 要打牌時，每種打法的牌效（由好到壞） */
   efficiency: Efficiency[];
   /** 要打牌時，離和牌最近的幾條路線（向聽數 ≤ 2 時才有） */
@@ -183,13 +217,18 @@ export interface StrategyInfo {
   name: string;
   title: string;
   summary: string;
+  kind: "strategy" | "bot" | "mjai";
+  /** 最後更新時間（Unix 秒）；內建機器人沒有 */
+  updated: number | null;
 }
 
 export interface SessionConfig {
   seed?: number | null;
   seat: Seat;
   opponents: [string, string, string];
-  strategy: string;
+  strategy?: string;
+  /** 提示與復盤的顧問（1–3 個；第一個是主要的） */
+  advisors: string[];
   max_hands?: number | null;
 }
 
@@ -222,6 +261,10 @@ export interface Reviewed {
   strategy: number;
   player: number;
   ai: number | null;
+  /** 每個顧問的選擇（依 ReviewState.advisors） */
+  picks: (number | null)[];
+  /** 每個顧問在這次詢問的機率（只有 AI 有） */
+  policies: (Policy | null)[];
   notes: string[];
   difference: string | null;
   eval: Evaluation | null;
@@ -257,7 +300,7 @@ export interface Summary {
 export type ReviewState =
   | { state: "idle" }
   | { state: "running"; seconds: number }
-  | { state: "done"; review: GameReview; summary: Summary; seconds: number }
+  | { state: "done"; advisors: AdvisorInfo[]; review: GameReview; summary: Summary; seconds: number }
   | { state: "failed"; error: string };
 
 export interface ReviewConfig {
@@ -284,6 +327,7 @@ export interface LogMeta {
   seed?: number | null;
   seat?: Seat | null;
   strategy?: string | null;
+  advisors?: string[];
 }
 
 /** 讀入的牌譜的概要。 */
@@ -311,8 +355,14 @@ export interface ExperimentTarget {
   ask: number;
   kind: DecisionKind;
   options: string[];
-  /** 策略的選擇（比較基準） */
+  /** 比較基準的選擇（做這個決策的顧問） */
   reference: number;
+  /** 比較基準的名稱，例如策略的標題、Mortal s42 */
+  referenceLabel: string;
+  /** 其他顧問的選擇：[名稱, 選項] */
+  marks: [string, number][];
+  /** 重打用的策略（顧問名稱；不是策略時用基礎策略） */
+  strategy?: string;
   /** 玩家的選擇（復盤時） */
   player?: number;
 }

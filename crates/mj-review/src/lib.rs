@@ -15,7 +15,14 @@
 //! 可以另外掛一個說 mjai 的強 AI（例如 Mortal，`Options::mjai`）一起旁觀（M8）：
 //! 每個決策多記一個「AI 的選擇」，彙整時算玩家、策略與 AI 三方的一致率。
 //! 只比一致率時可以關掉反事實評估（`Options::evaluate`），快很多。
+//!
+//! 練習 App 的復盤可以指定最多三個「顧問」（M14.5，[`advisor`]）：策略或 mjai AI。第一個顧問是比較基準
+//! （`Reviewed::strategy`，失誤與反事實評估都和它比）；每個決策列出每個顧問的選擇（`Reviewed::picks`），
+//! mjai AI 另附各動作的機率。重打（反事實評估）一律用 `review_game` 的策略。
 
+pub mod advisor;
+
+use advisor::{Advisor, Policy, Watcher, pick};
 use mj_core::Pai;
 use mj_engine::{Action, Event, Player, PlayerView, Seat, hand_seed};
 use mj_mjai::{MjaiPlayer, PooledBot, ShadowChoice};
@@ -42,6 +49,10 @@ pub struct Options {
     pub evaluate: bool,
     /// 一起旁觀的 mjai AI（程式與參數）；每個復盤的座位一個行程
     pub mjai: Option<Vec<String>>,
+    /// 顧問（空 = 只有策略）。第一個是比較基準
+    pub advisors: Vec<Advisor>,
+    /// 哪個顧問就是 `review_game` 的策略本身（它的選擇與理由直接取自策略；`None` = 策略不在顧問中，不顯示理由）
+    pub base_advisor: Option<usize>,
 }
 
 /// 反事實評估的結果。
@@ -100,13 +111,17 @@ pub struct Reviewed {
     pub kind: DecisionKind,
     /// 選項
     pub options: Vec<String>,
-    /// 策略的選擇
+    /// 比較基準的選擇：策略，或有顧問時第一個顧問
     pub strategy: usize,
     /// 玩家的選擇
     pub player: usize,
     /// mjai AI 的選擇（有掛 AI、而且它的動作能對應到這個決策的選項時）
     pub ai: Option<usize>,
-    /// 策略的理由
+    /// 每個顧問的選擇（依 `GameReview::advisors`；走了另一條路時為 `None`）
+    pub picks: Vec<Option<usize>>,
+    /// 每個顧問在這次詢問的機率（只有 mjai AI 有）
+    pub policies: Vec<Option<Policy>>,
+    /// 策略的理由（策略不是顧問之一時是空的）
     pub notes: Vec<String>,
     /// 玩家與策略選擇不同時的差異類型（例如「向聽倒退」「漏鳴」）
     pub difference: Option<String>,
@@ -143,15 +158,18 @@ pub struct GameReview {
     pub incomparable: usize,
     /// 需要評估、但快照點不支援（例如搶槓）而略過的決策數
     pub skipped: usize,
+    /// 顧問的名稱（與 `Reviewed::picks` 對應）
+    pub advisors: Vec<String>,
     /// mjai AI 的回應無法對應到合法動作的次數（與第一個原因）
     pub ai_errors: usize,
     pub ai_first_error: Option<String>,
 }
 
-/// 同時旁觀的兩個玩家：策略（動作被回傳，但重播時不採用）與 mjai AI。
+/// 同時旁觀的玩家：策略（動作被回傳，但重播時不採用）、mjai AI 與顧問。
 struct Both<'a> {
     a: &'a mut dyn Player,
     b: Option<&'a mut MjaiPlayer<PooledBot>>,
+    watchers: &'a mut [Option<Watcher>],
 }
 
 impl Player for Both<'_> {
@@ -160,11 +178,17 @@ impl Player for Both<'_> {
         if let Some(b) = self.b.as_mut() {
             b.on_event(me, event);
         }
+        for w in self.watchers.iter_mut().flatten() {
+            w.on_event(me, event);
+        }
     }
 
     fn act(&mut self, view: &PlayerView, legal: &[Action]) -> Action {
         if let Some(b) = self.b.as_mut() {
             b.act(view, legal);
+        }
+        for w in self.watchers.iter_mut().flatten() {
+            w.act(view, legal);
         }
         self.a.act(view, legal)
     }
@@ -198,13 +222,31 @@ pub fn review_game(
             _ => Ok(None),
         })
         .collect::<Result<_, _>>()?;
+    // 顧問：復盤的座位各一組（策略本身那個顧問不必另外旁觀）。
+    let mut watchers: Vec<Vec<Option<Watcher>>> = (0..4u8)
+        .map(|s| {
+            opts.advisors
+                .iter()
+                .enumerate()
+                .map(|(i, a)| {
+                    if seats.contains(&s) && opts.base_advisor != Some(i) {
+                        Watcher::new(a, &rec.players).map(Some)
+                    } else {
+                        Ok(None)
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .collect::<Result<_, _>>()?;
     let replayed = {
         let mut both: Vec<Both> = shadows
             .iter_mut()
             .zip(ais.iter_mut())
-            .map(|(a, b)| Both {
+            .zip(watchers.iter_mut())
+            .map(|((a, b), w)| Both {
                 a: a.as_mut() as &mut dyn Player,
                 b: b.as_mut(),
+                watchers: w,
             })
             .collect();
         let refs: [Option<&mut dyn Player>; 4] = {
@@ -217,11 +259,21 @@ pub fn review_game(
         .iter_mut()
         .map(|a| a.as_mut().map(|a| a.take_choices()).unwrap_or_default())
         .collect();
-    let ai_failures: Vec<&ShadowChoice> = ai_choices
+    let mut ai_failures: Vec<Option<String>> = ai_choices
         .iter()
         .flatten()
         .filter(|c| c.error.is_some())
+        .map(|c| c.error.clone())
         .collect();
+    ai_failures.extend(
+        watchers
+            .iter()
+            .flatten()
+            .flatten()
+            .flat_map(|w| &w.answers)
+            .filter(|a| a.error.is_some())
+            .map(|a| a.error.clone()),
+    );
 
     // 2. 把玩家的動作對應到策略的決策選項。
     let mut decisions = Vec::new();
@@ -240,18 +292,50 @@ pub fn review_game(
                 continue;
             };
             let riichi_pai = matches!(r.kind, DecisionKind::Riichi | DecisionKind::Tedashi)
-                .then(|| strategy_discard(&records, i, point))
+                .then(|| strategy_discard(&records, i, &point.legal))
                 .flatten();
-            match option_of_action(r.kind, &point.legal, &point.chosen, riichi_pai) {
-                Some(player) => {
-                    let ai = ai_choices[usize::from(seat)]
-                        .get(r.act_index as usize)
-                        .and_then(|c| c.action.as_ref())
-                        .and_then(|a| option_of_action(r.kind, &point.legal, a, riichi_pai));
-                    decisions.push(reviewed(seat, r, point, player, ai));
+            let Some(player) = option_of_action(r.kind, &point.legal, &point.chosen, riichi_pai)
+            else {
+                incomparable += 1;
+                continue;
+            };
+            let ai = ai_choices[usize::from(seat)]
+                .get(r.act_index as usize)
+                .and_then(|c| c.action.as_ref())
+                .and_then(|a| option_of_action(r.kind, &point.legal, a, riichi_pai));
+            let answers: Vec<Option<&advisor::Answer>> = watchers[usize::from(seat)]
+                .iter()
+                .map(|w| w.as_ref().and_then(|w| w.answers.get(r.act_index as usize)))
+                .collect();
+            let picks: Vec<Option<usize>> = (0..opts.advisors.len())
+                .map(|k| {
+                    if opts.base_advisor == Some(k) {
+                        Some(r.chosen)
+                    } else {
+                        answers[k]
+                            .and_then(|a| pick(r.kind, &r.options, &point.legal, a, riichi_pai))
+                    }
+                })
+                .collect();
+            // 有顧問時，比較基準是第一個顧問；它走了另一條路的決策無法比較。
+            let reference = match picks.first() {
+                None => r.chosen,
+                Some(Some(p)) => *p,
+                Some(None) => {
+                    incomparable += 1;
+                    continue;
                 }
-                None => incomparable += 1,
+            };
+            let mut d = reviewed(seat, r, point, reference, player, ai);
+            d.policies = answers
+                .iter()
+                .map(|a| a.and_then(|a| a.policy.clone()))
+                .collect();
+            d.picks = picks;
+            if !opts.advisors.is_empty() && opts.base_advisor.is_none() {
+                d.notes.clear();
             }
+            decisions.push(d);
         }
     }
     decisions.sort_by_key(|d| (d.hand_index, d.turn, d.seat));
@@ -283,13 +367,14 @@ pub fn review_game(
         decisions,
         incomparable,
         skipped,
+        advisors: opts.advisors.iter().map(|a| a.name.clone()).collect(),
         ai_errors: ai_failures.len(),
-        ai_first_error: ai_failures.first().and_then(|c| c.error.clone()),
+        ai_first_error: ai_failures.first().cloned().flatten(),
     })
 }
 
 /// 立直與手切摸切決策時策略要打的牌：同一次詢問中策略何切的選擇；沒有何切決策（只能打一種牌）時由合法動作推得。
-fn strategy_discard(records: &[DecisionRecord], i: usize, point: &DecisionPoint) -> Option<Pai> {
+pub fn strategy_discard(records: &[DecisionRecord], i: usize, legal: &[Action]) -> Option<Pai> {
     let r = &records[i];
     let discard = records[..i]
         .iter()
@@ -298,11 +383,11 @@ fn strategy_discard(records: &[DecisionRecord], i: usize, point: &DecisionPoint)
     match discard {
         Some(d) => parse_discard_label(&d.options[d.chosen]),
         // 只有一種牌可打時沒有何切紀錄：立直決策找可以立直的牌，手切摸切找兩種都能打的牌。
-        None if r.kind == DecisionKind::Tedashi => point.legal.iter().find_map(|a| match a {
+        None if r.kind == DecisionKind::Tedashi => legal.iter().find_map(|a| match a {
             Action::Discard {
                 pai,
                 tsumogiri: true,
-            } if point.legal.contains(&Action::Discard {
+            } if legal.contains(&Action::Discard {
                 pai: *pai,
                 tsumogiri: false,
             }) =>
@@ -311,7 +396,7 @@ fn strategy_discard(records: &[DecisionRecord], i: usize, point: &DecisionPoint)
             }
             _ => None,
         }),
-        None => point.legal.iter().find_map(|a| match a {
+        None => legal.iter().find_map(|a| match a {
             Action::Riichi { pai, .. } => Some(*pai),
             _ => None,
         }),
@@ -327,11 +412,12 @@ fn reviewed(
     seat: Seat,
     r: &DecisionRecord,
     point: &DecisionPoint,
+    reference: usize,
     player: usize,
     ai: Option<usize>,
 ) -> Reviewed {
     let difference =
-        (player != r.chosen).then(|| classify(r.kind, &r.options, r.chosen, player, &point.view));
+        (player != reference).then(|| classify(r.kind, &r.options, reference, player, &point.view));
     Reviewed {
         seat,
         hand_index: r.hand_index,
@@ -341,9 +427,11 @@ fn reviewed(
         riichi_opponents: r.situation.riichi_opponents,
         kind: r.kind,
         options: r.options.clone(),
-        strategy: r.chosen,
+        strategy: reference,
         player,
         ai,
+        picks: Vec::new(),
+        policies: Vec::new(),
         notes: r.notes.clone(),
         difference,
         eval: None,

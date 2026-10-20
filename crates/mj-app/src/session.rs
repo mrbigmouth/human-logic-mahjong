@@ -1,6 +1,7 @@
 //! 對局 session：人類一個座位、其餘座位是 AI。對局在背景執行緒進行，輪到人類時暫停，
 //! 等 UI 送來動作（[`Session::act`]）。UI 以 [`Session::poll`] 取得新的事件幀與目前的詢問。
 
+use crate::advisor::{AdvisorInfo, Advisors, advisors};
 use crate::experiment::{ActionLog, Prepared, Recorder, snapshot_from_actions};
 use crate::paifu::{LogMeta, with_meta};
 use crate::review::ReviewJob;
@@ -9,10 +10,11 @@ use crate::table::{Frame, TableBuilder, seat_name, table_mismatch};
 use mj_core::Pai;
 use mj_engine::{Action, Event, GameConfig, Player, PlayerView, Seat, run_game};
 use mj_mjai::{MjaiPlayer, PooledBot};
+use mj_review::advisor::{Answer, Policy, Watcher, pick};
 use mj_rules::riichi::RiichiConfig;
 use mj_sim::bots::{GreedyBot, RandomBot};
 use mj_strategy::find_strategy_spec;
-use mj_strategy::framework::{Strategy, StrategyPlayer};
+use mj_strategy::framework::{DecisionRecord, Strategy, StrategyPlayer};
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -31,10 +33,23 @@ pub struct SessionConfig {
     pub seat: Seat,
     /// 其他三家（從人類的下家開始）：策略名稱、`greedy`、`random` 或 `mjai:<程式 參數…>`
     pub opponents: [String; 3],
-    /// 提示與復盤用的策略
+    /// 提示與復盤用的策略（`advisors` 是空的時候用）
     pub strategy: String,
+    /// 提示與復盤的顧問（1–3 個：策略名稱或 `mjai:<程式 參數…>`）；第一個是主要的（提示標示的動作、復盤的比較基準）
+    pub advisors: Vec<String>,
     /// 打完這麼多手就結束（單局練習用；`None` = 打完整場半莊）
     pub max_hands: Option<u32>,
+}
+
+impl SessionConfig {
+    /// 顧問的名稱：`advisors`，空的時候是 `strategy`。
+    pub fn advisor_names(&self) -> Vec<String> {
+        if self.advisors.is_empty() {
+            vec![self.strategy.clone()]
+        } else {
+            self.advisors.clone()
+        }
+    }
 }
 
 impl Default for SessionConfig {
@@ -44,6 +59,7 @@ impl Default for SessionConfig {
             seat: 0,
             opponents: std::array::from_fn(|_| DEFAULT_STRATEGY.to_string()),
             strategy: DEFAULT_STRATEGY.to_string(),
+            advisors: Vec::new(),
             max_hands: None,
         }
     }
@@ -134,6 +150,23 @@ pub struct HintDecision {
     pub chosen: usize,
     /// 決策函式寫下的理由
     pub notes: Vec<String>,
+    /// 每個顧問在這個決策的選擇（依 `Hint::advisors`；走了另一條路時為 `None`）
+    pub picks: Vec<Option<usize>>,
+}
+
+/// 一個顧問在這次詢問的建議。
+#[derive(Debug, Clone, Serialize)]
+pub struct Advice {
+    #[serde(flatten)]
+    pub info: AdvisorInfo,
+    /// 選的動作（在 `Ask::actions` 中的編號；AI 回應不合法時為 `None`）
+    pub action: Option<usize>,
+    pub label: String,
+    /// 決策（策略：自己的決策與理由；AI：基礎策略的決策結構，`chosen` 是 AI 的選擇、沒有理由）
+    pub decisions: Vec<HintDecision>,
+    /// AI：各動作的機率
+    pub policy: Option<Policy>,
+    pub error: Option<String>,
 }
 
 /// 牌效參考：打出某張牌後的向聽數與進張（剩餘張數扣掉自己看得到的牌）。
@@ -147,13 +180,13 @@ pub struct Efficiency {
     pub ukeire: f32,
 }
 
-/// 即時提示：策略在這次詢問的選擇與理由。
+/// 即時提示：各顧問在這次詢問的選擇與理由（或機率）。
 #[derive(Debug, Clone, Serialize)]
 pub struct Hint {
-    /// 策略選的動作（在 `Ask::actions` 中的編號）
+    /// 第一個顧問選的動作（在 `Ask::actions` 中的編號）
     pub action: Option<usize>,
     pub label: String,
-    pub decisions: Vec<HintDecision>,
+    pub advisors: Vec<Advice>,
     /// 要打牌時，每種打法的牌效（由好到壞）
     pub efficiency: Vec<Efficiency>,
     /// 要打牌時，離和牌最近的幾條路線（向聽數 ≤ 2 時才有；見 `mj_tools::routes`）
@@ -259,8 +292,11 @@ struct HumanSeat {
     shared: Arc<Shared>,
     actions: Receiver<Action>,
     builder: TableBuilder,
-    /// 旁觀的策略（提示用）
+    /// 旁觀的基礎策略（提示的決策結構）
     hint: Box<dyn StrategyPlayer>,
+    /// 其他顧問（依顧問順序；基礎策略的位置是 `None`）
+    watchers: Vec<Option<Watcher>>,
+    advisors: Vec<AdvisorInfo>,
     /// session 已被丟棄：之後自動打完（摸切或跳過）
     abandoned: bool,
     /// 剛自動摸切：下一個自己的打牌幀標記為自動
@@ -270,19 +306,56 @@ struct HumanSeat {
 impl HumanSeat {
     fn hint(&mut self, view: &PlayerView, legal: &[Action]) -> Option<Hint> {
         let chosen = self.hint.act(view, legal);
-        let decisions = self
-            .hint
-            .take_records()
-            .into_iter()
-            .map(|r| HintDecision {
-                kind: r.kind.name().to_string(),
-                kind_key: r.kind,
-                options: r.options,
-                chosen: r.chosen,
-                notes: r.notes,
+        let base_records = self.hint.take_records();
+        for w in self.watchers.iter_mut().flatten() {
+            w.act(view, legal);
+        }
+        let answers: Vec<Answer> = (0..self.advisors.len())
+            .map(|k| match &self.watchers[k] {
+                Some(w) => w.last().cloned().unwrap_or_default(),
+                None => Answer {
+                    action: Some(chosen.clone()),
+                    records: base_records.clone(),
+                    ..Answer::default()
+                },
             })
             .collect();
-        let index = legal.iter().position(|a| *a == chosen);
+        let advisors: Vec<Advice> = self
+            .advisors
+            .iter()
+            .zip(&answers)
+            .enumerate()
+            .map(|(k, (info, answer))| {
+                let action = answer
+                    .action
+                    .as_ref()
+                    .and_then(|a| legal.iter().position(|b| b == a));
+                let decisions = if info.ai {
+                    // AI 沒有自己的決策：用基礎策略的決策結構，選擇換成 AI 的，不附理由。
+                    hint_decisions(&base_records, legal, &answers)
+                        .into_iter()
+                        .filter_map(|mut d| {
+                            d.chosen = d.picks[k]?;
+                            d.notes.clear();
+                            Some(d)
+                        })
+                        .collect()
+                } else {
+                    hint_decisions(&answer.records, legal, &answers)
+                };
+                Advice {
+                    info: info.clone(),
+                    action,
+                    label: answer
+                        .action
+                        .as_ref()
+                        .map_or_else(|| "（無法得知）".into(), |a| action_view(0, a).label),
+                    decisions,
+                    policy: answer.policy.clone(),
+                    error: answer.error.clone(),
+                }
+            })
+            .collect();
         // 只列可以打的牌（食替禁止的牌不列）。
         let can_discard = |t: mj_core::Tile| {
             legal
@@ -313,13 +386,41 @@ impl HumanSeat {
             Vec::new()
         };
         Some(Hint {
-            action: index,
-            label: action_view(0, &chosen).label,
-            decisions,
+            action: advisors.first().and_then(|a| a.action),
+            label: advisors
+                .first()
+                .map_or_else(String::new, |a| a.label.clone()),
+            advisors,
             efficiency,
             routes,
         })
     }
+}
+
+/// 決策紀錄 → 提示的決策，附上每個顧問在這個決策的選擇。
+fn hint_decisions(
+    records: &[DecisionRecord],
+    legal: &[Action],
+    answers: &[Answer],
+) -> Vec<HintDecision> {
+    records
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let riichi_pai = mj_review::strategy_discard(records, i, legal);
+            HintDecision {
+                kind: r.kind.name().to_string(),
+                kind_key: r.kind,
+                options: r.options.clone(),
+                chosen: r.chosen,
+                notes: r.notes.clone(),
+                picks: answers
+                    .iter()
+                    .map(|a| pick(r.kind, &r.options, legal, a, riichi_pai))
+                    .collect(),
+            }
+        })
+        .collect()
 }
 
 fn route_view(r: mj_tools::routes::WinRoute) -> RouteView {
@@ -390,6 +491,9 @@ fn auto_action(legal: &[Action]) -> Action {
 impl Player for HumanSeat {
     fn on_event(&mut self, me: Seat, event: &Event) {
         self.hint.on_event(me, event);
+        for w in self.watchers.iter_mut().flatten() {
+            w.on_event(me, event);
+        }
         let mut frame = self.builder.apply(event);
         if self.auto_pending && matches!(event, Event::Discard { seat, .. } if *seat == me) {
             frame.auto = true;
@@ -470,7 +574,7 @@ pub struct Session {
     pub seed: u64,
     /// 四家名稱（依座位）
     pub names: [String; 4],
-    strategy: Arc<dyn Strategy>,
+    advisors: Advisors,
     shared: Arc<Shared>,
     actions: Sender<Action>,
     review: ReviewJob,
@@ -486,7 +590,7 @@ impl Session {
         if config.seat > 3 {
             return Err("座位必須是 0–3".into());
         }
-        let strategy: Arc<dyn Strategy> = Arc::from(find_strategy_spec(&config.strategy)?);
+        let advisors = advisors(&config.advisor_names())?;
         let seed = config.seed.unwrap_or_else(|| {
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -513,7 +617,20 @@ impl Session {
                     shared: shared.clone(),
                     actions: rx.take().expect("one human seat"),
                     builder: TableBuilder::new(me),
-                    hint: strategy.player(true, None),
+                    hint: advisors.base.player(true, None),
+                    watchers: advisors
+                        .list
+                        .iter()
+                        .enumerate()
+                        .map(|(k, a)| {
+                            if Some(k) == advisors.base_index {
+                                Ok(None)
+                            } else {
+                                Watcher::new(a, &names).map(Some)
+                            }
+                        })
+                        .collect::<Result<_, String>>()?,
+                    advisors: advisors.infos(),
                     abandoned: false,
                     auto_pending: false,
                 })
@@ -562,7 +679,7 @@ impl Session {
             config,
             seed,
             names,
-            strategy,
+            advisors,
             shared,
             actions: tx,
             review: ReviewJob::default(),
@@ -634,8 +751,7 @@ impl Session {
     pub fn start_review(&self, rc: &ReviewConfig) -> Result<(), String> {
         let text = self.mjai_log().ok_or("對局還沒結束")?;
         let record = mj_paifu::parse(&text, &format!("session-{}", self.seed))?;
-        self.review
-            .start(self.strategy.clone(), record, self.me(), rc)
+        self.review.start(&self.advisors, record, self.me(), rc)
     }
 
     /// 復盤狀態。
@@ -654,7 +770,8 @@ impl Session {
             &LogMeta {
                 seed: Some(self.seed),
                 seat: Some(self.me()),
-                strategy: Some(self.config.strategy.clone()),
+                strategy: Some(self.base_name()),
+                advisors: self.advisors.names(),
             },
         );
         let lines: Vec<String> = events.iter().map(|v| v.to_string()).collect();
@@ -666,6 +783,7 @@ impl Session {
     pub fn snapshot_job(
         &self,
         ask_index: u32,
+        strategy: Arc<dyn Strategy>,
     ) -> impl FnOnce() -> Result<Prepared, String> + Send + 'static {
         let cfg = self.cfg.clone();
         let actions = self
@@ -673,7 +791,6 @@ impl Session {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        let strategy = self.strategy.clone();
         let me = self.me();
         let expected = self.shared.lock().views.get(ask_index as usize).cloned();
         move || {
@@ -686,6 +803,19 @@ impl Session {
                 return Err("重播到的局面與對局不一致".into());
             }
             Ok((snap, base))
+        }
+    }
+
+    /// 顧問。
+    pub fn advisors(&self) -> &Advisors {
+        &self.advisors
+    }
+
+    /// 基礎策略的名稱（含參數覆寫）。
+    fn base_name(&self) -> String {
+        match self.advisors.base_index {
+            Some(i) => self.advisors.list[i].name.clone(),
+            None => DEFAULT_STRATEGY.to_string(),
         }
     }
 

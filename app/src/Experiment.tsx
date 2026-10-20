@@ -28,10 +28,11 @@ export function Experiment({ target, onClose }: Props) {
         s.source === target.source &&
         (target.seat === undefined || s.seat === target.seat) &&
         s.ask === target.ask &&
-        s.kind === target.kind;
+        s.kind === target.kind &&
+        s.reference === target.reference;
       setState(mine || s.state === "running" ? s : { state: "idle" });
     });
-  }, [target.source, target.seat, target.ask, target.kind, target.options]);
+  }, [target.source, target.seat, target.ask, target.kind, target.options, target.reference]);
 
   useEffect(() => {
     if (state.state !== "running") return;
@@ -53,6 +54,7 @@ export function Experiment({ target, onClose }: Props) {
         reference: target.reference,
         worlds,
         metric,
+        strategy: target.strategy,
       });
       setState({ state: "running", done: 0, total: worlds, seconds: 0 });
     } catch (e) {
@@ -63,6 +65,21 @@ export function Experiment({ target, onClose }: Props) {
   // 結果的格式依結果本身的衡量方式（設定可能已經改了）。
   const shown = state.state === "done" ? state.metric : metric;
   const fmt = (x: number) => (shown === "points" ? `${Math.round(x)}` : `${Math.round(x * 10) / 10}`);
+  const ref = target.referenceLabel;
+  /** 選項的標籤：比較基準、其他顧問、玩家。 */
+  const badges = (i: number) => (
+    <>
+      {i === target.reference && <span className="badge">{ref}</span>}
+      {target.marks
+        .filter(([, o]) => o === i)
+        .map(([name]) => (
+          <span key={name} className="badge other">
+            {name}
+          </span>
+        ))}
+      {i === target.player && <span className="badge type">你</span>}
+    </>
+  );
   const toggle = (i: number) => {
     const n = new Set(chosen);
     if (n.has(i)) n.delete(i);
@@ -84,15 +101,14 @@ export function Experiment({ target, onClose }: Props) {
         )}
       </div>
       <p className="muted">
-        每個選項強制選定後，四家都依策略打完（對手不論實際是誰，重打時都用策略）；看不到的牌依你當時看得到的資訊重抽。
+        每個選項強制選定後，四家都依{target.strategy ? "這個" : ""}策略打完（對手不論實際是誰，重打時都用策略；AI 的決策用基礎策略重打）；看不到的牌依你當時看得到的資訊重抽。
       </p>
       <div className="exp-options">
         {target.options.map((o, i) => (
           <label key={i} className={i === target.reference ? "strategy" : ""}>
             <input type="checkbox" checked={chosen.has(i) || i === target.reference} disabled={i === target.reference} onChange={() => toggle(i)} />
             <TileText text={o} />
-            {i === target.reference && <span className="badge">策略</span>}
-            {i === target.player && <span className="badge type">你</span>}
+            {badges(i)}
           </label>
         ))}
       </div>
@@ -132,14 +148,14 @@ export function Experiment({ target, onClose }: Props) {
         <>
           <p className="muted">
             {state.worlds} 個世界{state.cancelled ? "（已停止）" : ""}，{Math.round(state.seconds * 10) / 10} 秒；
-            差值 = 這個選項比策略的選擇多得的{state.metric === "points" ? "點" : "名次點"}（同一組世界的成對差，± 為標準誤）。
+            差值 = 這個選項比{ref}的選擇多得的{state.metric === "points" ? "點" : "名次點"}（同一組世界的成對差，± 為標準誤）。
           </p>
           <table className="exp-results">
             <thead>
               <tr>
                 <th>選項</th>
                 <th>平均（{state.metric === "points" ? "點" : "名次點"}）</th>
-                <th>與策略的差</th>
+                <th>與{ref}的差</th>
                 <th>本局和了</th>
                 <th>本局放銃</th>
                 {state.metric === "placement" && <th>平均順位</th>}
@@ -154,8 +170,7 @@ export function Experiment({ target, onClose }: Props) {
                     <tr key={r.option} className={r.option === state.reference ? "strategy" : ""}>
                       <td>
                         <TileText text={target.options[r.option]} />
-                        {r.option === state.reference && <span className="badge">策略</span>}
-                        {r.option === target.player && <span className="badge type">你</span>}
+                        {badges(r.option)}
                       </td>
                       <td className="num">
                         {fmt(r.mean)} <span className="muted">±{fmt(r.se)}</span>
@@ -171,7 +186,7 @@ export function Experiment({ target, onClose }: Props) {
                 })}
             </tbody>
           </table>
-          <p className="muted">差值超過 2 倍標準誤時以顏色標示（綠 = 比策略好、紅 = 比策略差）。</p>
+          <p className="muted">差值超過 2 倍標準誤時以顏色標示（綠 = 比{ref}好、紅 = 比{ref}差）。</p>
         </>
       )}
     </div>

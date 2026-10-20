@@ -3,8 +3,8 @@
 //!
 //! | 名稱 | 參數 | 回傳 |
 //! |---|---|---|
-//! | `strategies` | — | 策略清單（`name`、`title`、`summary`） |
-//! | `entrants` | — | 可以上桌的對手：策略、內建機器人、已安裝的 Mortal（`name`、`title`、`summary`） |
+//! | `strategies` | — | 策略清單（`name`、`title`、`summary`、`kind`、`updated`；由新至舊） |
+//! | `entrants` | — | 可以上桌的對手：策略、內建機器人、已安裝的 Mortal（同上；`kind` = strategy／bot／mjai） |
 //! | `new_game` | [`SessionConfig`] | `{ seed, seat, names }` |
 //! | `poll` | `{ since, wait_ms }` | [`Update`](crate::Update)（長輪詢：沒有新東西時最多等 `wait_ms`） |
 //! | `act` | `{ ask, index }` | `null` |
@@ -61,8 +61,9 @@ struct SeatArgs {
 #[derive(Deserialize)]
 struct LogReviewArgs {
     seat: u8,
+    /// 顧問（空 = 牌譜記載的）
     #[serde(default)]
-    strategy: Option<String>,
+    advisors: Option<Vec<String>>,
     #[serde(flatten)]
     config: ReviewConfig,
 }
@@ -91,16 +92,43 @@ fn to_json<T: serde::Serialize>(v: &T) -> Result<Value, String> {
     serde_json::to_value(v).map_err(|e| e.to_string())
 }
 
-/// 可以上桌的對手。Mortal 只在從專案目錄執行、而且已用 `tools/mortal/setup.sh` 安裝時列出。
-fn entrants() -> Vec<Value> {
-    let mut out: Vec<Value> = mj_strategy::all_strategies()
+/// 檔案的修改時間（Unix 秒）。
+fn file_mtime(path: &str) -> Option<u64> {
+    let t = std::fs::metadata(path).ok()?.modified().ok()?;
+    Some(t.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs())
+}
+
+/// 策略清單，附最後更新時間（`updated`，Unix 秒；原始碼還在時即時計算，見 `mj_strategy::framework::source`）。
+fn strategies() -> Vec<Value> {
+    mj_strategy::all_strategies()
         .iter()
-        .map(|s| json!({ "name": s.name(), "title": s.title(), "summary": s.summary() }))
-        .collect();
-    out.push(
-        json!({ "name": "greedy", "title": "貪婪機器人", "summary": "只看牌效，隨機鳴牌（很弱）" }),
-    );
-    out.push(json!({ "name": "random", "title": "隨機機器人", "summary": "隨便打（極弱）" }));
+        .map(|s| {
+            json!({
+                "name": s.name(), "title": s.title(), "summary": s.summary(),
+                "kind": "strategy", "updated": s.updated(),
+            })
+        })
+        .collect()
+}
+
+/// 由新至舊排序（沒有時間的放最後，順序不變）。
+fn newest_first(mut v: Vec<Value>) -> Vec<Value> {
+    v.sort_by_key(|x| std::cmp::Reverse(x["updated"].as_u64()));
+    v
+}
+
+/// 可以上桌的對手。Mortal 只在從專案目錄執行、而且已用 `tools/mortal/setup.sh` 安裝時列出
+/// （更新時間是權重檔的時間）。
+fn entrants() -> Vec<Value> {
+    let mut out = strategies();
+    out.push(json!({
+        "name": "greedy", "title": "貪婪機器人", "summary": "只看牌效，隨機鳴牌（很弱）",
+        "kind": "bot", "updated": null,
+    }));
+    out.push(json!({
+        "name": "random", "title": "隨機機器人", "summary": "隨便打（極弱）",
+        "kind": "bot", "updated": null,
+    }));
     let installed = std::path::Path::new("tools/mortal/.venv").is_dir();
     for (model, path, summary) in [
         (
@@ -119,10 +147,12 @@ fn entrants() -> Vec<Value> {
                 "name": format!("mjai:tools/mortal/run.sh {model}"),
                 "title": format!("Mortal {model}"),
                 "summary": summary,
+                "kind": "mjai",
+                "updated": file_mtime(path),
             }));
         }
     }
-    out
+    newest_first(out)
 }
 
 impl App {
@@ -149,14 +179,7 @@ impl App {
     /// 執行一個 API 呼叫。
     pub fn call(&self, name: &str, params: Value) -> Result<Value, String> {
         match name {
-            "strategies" => Ok(Value::Array(
-                mj_strategy::all_strategies()
-                    .iter()
-                    .map(
-                        |s| json!({ "name": s.name(), "title": s.title(), "summary": s.summary() }),
-                    )
-                    .collect(),
-            )),
+            "strategies" => Ok(Value::Array(newest_first(strategies()))),
             "entrants" => Ok(Value::Array(entrants())),
             "new_game" => {
                 let cfg: SessionConfig = args(params)?;
@@ -206,8 +229,8 @@ impl App {
             "start_log_review" => {
                 let a: LogReviewArgs = args(params)?;
                 let log = self.loaded()?;
-                let strategy = log.strategy_name(a.strategy);
-                log.start_review(a.seat, &strategy, &a.config)?;
+                let advisors = log.advisors(a.advisors)?;
+                log.start_review(a.seat, &advisors, &a.config)?;
                 Ok(Value::Null)
             }
             "log_review" => {
@@ -220,15 +243,14 @@ impl App {
                 match req.source.as_str() {
                     "game" => {
                         let s = self.current()?;
+                        let st = s.advisors().strategy(req.strategy.as_deref());
                         self.experiment
-                            .start(&req, s.me(), s.snapshot_job(ask_index))?;
+                            .start(&req, s.me(), s.snapshot_job(ask_index, st))?;
                     }
                     "log" => {
                         let log = self.loaded()?;
                         let seat = req.seat.ok_or("要指定座位")?;
-                        let name = log.strategy_name(req.strategy.clone());
-                        let st: Arc<dyn mj_strategy::framework::Strategy> =
-                            Arc::from(mj_strategy::find_strategy_spec(&name)?);
+                        let st = log.advisors(None)?.strategy(req.strategy.as_deref());
                         self.experiment
                             .start(&req, seat, log.snapshot_job(seat, ask_index, st))?;
                     }

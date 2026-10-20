@@ -2,6 +2,7 @@
 // 列出與策略選擇不同的決策、理由、期望值差與失誤統計。點一個決策可以看當時的牌桌，或跳到牌譜檢視器。
 
 import { useEffect, useState } from "react";
+import { AdvisorPicker, PolicyList } from "./Advisors";
 import { call } from "./api";
 import { Board, shortName } from "./Board";
 import { Experiment } from "./Experiment";
@@ -18,7 +19,10 @@ import {
   type ReviewState,
   type Reviewed,
   type Seat,
+  type StrategyInfo,
 } from "./types";
+
+const DEFAULT = "tenhou-normal-4p-hanchan/hand-reading";
 
 interface Props {
   info: LogInfo;
@@ -77,6 +81,16 @@ function SummaryTable({ rows, unit }: { rows: GroupSummary[]; unit: string }) {
 
 export function Review({ info, seat, onView, onQuit }: Props) {
   const [config, setConfig] = useState<ReviewConfig>({ rollouts: 32, metric: "points" });
+  // 顧問：牌譜記載的（本 App 的對局），否則預設策略。
+  const [advisors, setAdvisors] = useState<string[]>(() => {
+    const m = info.meta;
+    if (m?.advisors && m.advisors.length > 0) return m.advisors;
+    return [m?.strategy ?? DEFAULT];
+  });
+  const [choices, setChoices] = useState<StrategyInfo[]>([]);
+  useEffect(() => {
+    call<StrategyInfo[]>("entrants").then((e) => setChoices(e.filter((c) => c.kind !== "bot")));
+  }, []);
   const [state, setState] = useState<ReviewState>({ state: "idle" });
   const [frames, setFrames] = useState<Frame[]>([]);
   const [askFrames, setAskFrames] = useState(new Map<number, number>());
@@ -108,7 +122,7 @@ export function Review({ info, seat, onView, onQuit }: Props) {
 
   const start = async () => {
     try {
-      await call("start_log_review", { seat, ...config });
+      await call("start_log_review", { seat, advisors, ...config });
       setState({ state: "running", seconds: 0 });
     } catch (e) {
       setState({ state: "failed", error: String(e) });
@@ -122,10 +136,14 @@ export function Review({ info, seat, onView, onQuit }: Props) {
       <div className="review setup">
         <h1>復盤：{shortName(info.names[seat])}</h1>
         <p className="lead">
-          逐手比較你與策略的選擇。選擇不同的地方，會從當時的局面依你看得到的資訊重抽對手手牌與牌山，
-          兩個選項各重打很多次比較結果。
+          逐手比較你與策略（或 AI）的選擇。與第一個選擇不同的地方，會從當時的局面依你看得到的資訊重抽對手手牌與牌山，
+          兩個選項各重打很多次比較結果（重打一律用策略）。
         </p>
         <div className="form">
+          <div className="label">
+            比較的策略（最多 3 個，第一個是基準）
+            <AdvisorPicker choices={choices} value={advisors} onChange={setAdvisors} />
+          </div>
           <label>
             重打次數（每個不同的決策）
             <select value={config.rollouts} onChange={(e) => setConfig({ ...config, rollouts: Number(e.target.value) })}>
@@ -148,7 +166,7 @@ export function Review({ info, seat, onView, onQuit }: Props) {
         </div>
         {state.state === "failed" && <div className="error">{state.error}</div>}
         <div className="buttons">
-          <button className="primary big" onClick={start}>
+          <button className="primary big" onClick={start} disabled={advisors.length === 0}>
             開始復盤
           </button>
           <button onClick={onQuit}>返回</button>
@@ -167,6 +185,15 @@ export function Review({ info, seat, onView, onQuit }: Props) {
   }
 
   const { review, summary } = state;
+  const advs = state.advisors;
+  const ref = advs[0]?.title ?? "策略";
+  const base = advs.find((a) => !a.ai);
+  /** 各顧問在這個決策的選擇：[名稱, 選項]。 */
+  const picksOf = (d: Reviewed): [string, number][] =>
+    advs.flatMap((a, k) => {
+      const p = d.picks[k];
+      return p !== null && p !== undefined ? [[a.title, p] as [string, number]] : [];
+    });
   const decisions = review.decisions.filter((d) => filter === "all" || d.strategy !== d.player);
   const frameOf = (d: Reviewed) => askFrames.get(d.act_index + 1);
   const selFrame = selected ? frameOf(selected) : undefined;
@@ -186,8 +213,8 @@ export function Review({ info, seat, onView, onQuit }: Props) {
           </div>
         </div>
         <p className="muted">
-          {review.decisions.length} 個決策，與策略一致 {Math.round(summary.overall.agree * 100)}%；
-          平均損失＝策略的選擇比你的選擇多得的{unit}（正 = 策略較好）。花費 {Math.round(state.seconds)} 秒。
+          {review.decisions.length} 個決策，與{ref}一致 {Math.round(summary.overall.agree * 100)}%；
+          平均損失＝{ref}的選擇比你的選擇多得的{unit}（正 = {ref}較好）。花費 {Math.round(state.seconds)} 秒。
         </p>
         <SummaryTable rows={[{ ...summary.overall, label: "全部" }, ...summary.by_kind]} unit={unit} />
         {summary.by_type.length > 0 && (
@@ -215,7 +242,18 @@ export function Review({ info, seat, onView, onQuit }: Props) {
                   {d.difference && <span className="badge type">{d.difference}</span>}
                 </div>
                 <div className="choices">
-                  你：<TileText text={d.options[d.player]} />　策略：<TileText text={d.options[d.strategy]} />
+                  你：<TileText text={d.options[d.player]} />
+                  {advs.length === 0 && (
+                    <>
+                      　策略：<TileText text={d.options[d.strategy]} />
+                    </>
+                  )}
+                  {picksOf(d).map(([name, p]) => (
+                    <span key={name}>
+                      {"　"}
+                      {name}：<TileText text={d.options[p]} />
+                    </span>
+                  ))}
                   {d.ai !== null && (
                     <>
                       　AI：<TileText text={d.options[d.ai]} />
@@ -263,7 +301,8 @@ export function Review({ info, seat, onView, onQuit }: Props) {
                   {selected.options.map((o, i) => {
                     const tags = [
                       i === selected.player ? "你" : null,
-                      i === selected.strategy ? "策略" : null,
+                      ...(advs.length === 0 ? [i === selected.strategy ? "策略" : null] : []),
+                      ...picksOf(selected).map(([name, p]) => (p === i ? name : null)),
                       i === selected.ai ? "AI" : null,
                     ].filter(Boolean);
                     const ev = selected.eval?.option_ev[i] ?? null;
@@ -285,14 +324,26 @@ export function Review({ info, seat, onView, onQuit }: Props) {
                   實驗：比較這個決策的選項
                 </button>
               )}
-              <h4>策略的理由</h4>
-              <ul>
-                {selected.notes.map((n, j) => (
-                  <li key={j}>
-                    <TileText text={n} />
-                  </li>
-                ))}
-              </ul>
+              {advs.map((a, k) =>
+                a.ai ? (
+                  <div key={a.name}>
+                    <h4>{a.title} 的機率</h4>
+                    <PolicyList policy={selected.policies[k] ?? null} />
+                  </div>
+                ) : null,
+              )}
+              {selected.notes.length > 0 && (
+                <>
+                  <h4>{base?.title ?? "策略"}的理由</h4>
+                  <ul>
+                    {selected.notes.map((n, j) => (
+                      <li key={j}>
+                        <TileText text={n} />
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
             </div>
             {experimenting && (
               <div className="panel">
@@ -304,6 +355,9 @@ export function Review({ info, seat, onView, onQuit }: Props) {
                     kind: selected.kind,
                     options: selected.options,
                     reference: selected.strategy,
+                    referenceLabel: ref,
+                    marks: picksOf(selected).slice(advs.length > 0 ? 1 : 0),
+                    strategy: advs[0] && !advs[0].ai ? advs[0].name : undefined,
                     player: selected.player,
                   }}
                   onClose={() => setExperimenting(false)}
@@ -312,7 +366,7 @@ export function Review({ info, seat, onView, onQuit }: Props) {
             )}
           </>
         ) : (
-          <p className="muted">點選左邊的決策，查看當時的牌桌與策略的理由。</p>
+          <p className="muted">點選左邊的決策，查看當時的牌桌與策略的理由（或 AI 的機率）。</p>
         )}
       </div>
     </div>

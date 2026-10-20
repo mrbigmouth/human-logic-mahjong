@@ -82,6 +82,8 @@ pub fn run(opts: &Options) -> Result<(), String> {
         },
         evaluate: false,
         mjai: Some(opts.mjai.clone()),
+        advisors: Vec::new(),
+        base_advisor: None,
     };
     let results: Vec<Result<GameReview, String>> = records
         .par_iter()

@@ -307,6 +307,7 @@ dependencies = [
  "mj-tools",
  "rayon",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

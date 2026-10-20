@@ -707,11 +707,15 @@ tr.me {
   gap: 14px;
   margin: 20px 0;
 }
-.form label {
+.form label,
+.form .label {
   display: grid;
   grid-template-columns: 160px 1fr;
   gap: 4px 12px;
   align-items: center;
+}
+.form .label {
+  align-items: start;
 }
 .form .desc {
   grid-column: 2;
@@ -1030,4 +1034,78 @@ button.small {
 /* 實驗分頁的結果表格較長，面板拉高（牌桌會依空間自動縮小） */
 .panel-body.tall {
   height: 45vh;
+}
+/* 顧問（M14.5）：提示面板中各顧問並排；只有一個時與以前相同（決策可以多欄） */
+.advisors-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--n, 1), minmax(0, 1fr));
+  gap: 8px 16px;
+}
+.advisors-grid .advice {
+  min-width: 0;
+}
+.advisors-grid .advice + .advice {
+  border-left: 1px solid #333c47;
+  padding-left: 12px;
+}
+.advisors-grid[style*="--n: 2"] .decisions-grid,
+.advisors-grid[style*="--n: 3"] .decisions-grid {
+  grid-template-columns: 1fr;
+}
+.advisor-name {
+  color: var(--muted);
+  font-weight: normal;
+  margin-right: 8px;
+}
+.advice.main .advisor-name {
+  color: var(--accent);
+}
+.policy {
+  display: grid;
+  gap: 2px;
+  margin: 4px 0 6px;
+  font-size: 13px;
+}
+.prob-row {
+  display: grid;
+  grid-template-columns: minmax(80px, auto) 1fr 52px;
+  align-items: center;
+  gap: 8px;
+}
+.prob-bar {
+  height: 8px;
+  background: var(--panel-2);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.prob-bar span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.prob-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.advisor-picker {
+  display: grid;
+  gap: 4px;
+}
+.review-detail .policy {
+  max-width: 420px;
+}
+@media (max-width: 760px) {
+  .advisors-grid {
+    grid-template-columns: 1fr;
+  }
+  .advisors-grid .advice + .advice {
+    border-left: none;
+    padding-left: 0;
+    border-top: 1px solid #333c47;
+    padding-top: 6px;
+  }
+}
+.badge.other {
+  background: #4a3f6b;
 }

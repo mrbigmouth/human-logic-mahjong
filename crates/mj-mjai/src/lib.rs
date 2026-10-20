@@ -13,6 +13,7 @@
 //! `{"type":"none"}`。立直時先回應 `{"type":"reach","actor":0}`，收到自己的 `reach` 事件後再回應要打的牌。
 
 pub mod bots;
+pub mod mortal;
 
 use mj_core::Pai;
 use mj_engine::{Action, Event, Player, PlayerView, Seat};
@@ -152,6 +153,8 @@ pub struct MjaiPlayer<B: Bot> {
     shadow: bool,
     /// 旁觀模式下每次詢問的選擇（依詢問順序）
     choices: Vec<ShadowChoice>,
+    /// 旁觀模式下最近一次立直時 [`PEEK`] 的回應
+    last_peek: Option<Value>,
 }
 
 /// 旁觀模式下，AI 在一次詢問中的選擇。
@@ -163,6 +166,8 @@ pub struct ShadowChoice {
     pub reply: Value,
     /// 回應無法對應到合法動作的原因
     pub error: Option<String>,
+    /// 回應是立直時，[`PEEK`] 詢問「立直後打哪張」的回應
+    pub peek: Option<Value>,
 }
 
 /// mjai 的擴充請求（本專案的 `tools/mortal/mortal_bot.py` 支援）：「假設接著發生這些事件，你會怎麼做？」
@@ -182,6 +187,7 @@ impl<B: Bot> MjaiPlayer<B> {
             error: None,
             shadow: false,
             choices: Vec::new(),
+            last_peek: None,
         }
     }
 
@@ -253,6 +259,7 @@ impl<B: Bot> MjaiPlayer<B> {
                     if d["type"] != "dahai" {
                         return Err(format!("無法得知立直要打的牌（{PEEK} 的回應：{d}）"));
                     }
+                    self.last_peek = Some(d.clone());
                     d
                 } else {
                     // 兩段式：送出自己的 reach 事件，AI 再回應要打的牌。
@@ -350,25 +357,30 @@ impl<B: Bot> Player for MjaiPlayer<B> {
 impl<B: Bot> MjaiPlayer<B> {
     fn shadow_act(&mut self, view: &PlayerView, legal: &[Action]) -> Action {
         self.add_robbed_kan(view, legal);
-        let choice = match self.ask() {
+        self.last_peek = None;
+        let mut choice = match self.ask() {
             Err(e) => ShadowChoice {
                 action: None,
                 reply: Value::Null,
                 error: Some(e),
+                peek: None,
             },
             Ok(r) => match self.reply_to_action(view, legal, &r) {
                 Ok(a) => ShadowChoice {
                     action: Some(a),
                     reply: r,
                     error: None,
+                    peek: None,
                 },
                 Err(e) => ShadowChoice {
                     action: None,
                     reply: r,
                     error: Some(e),
+                    peek: None,
                 },
             },
         };
+        choice.peek = self.last_peek.take();
         let action = choice.action.clone();
         self.choices.push(choice);
         // 旁觀者的動作不會被採用。

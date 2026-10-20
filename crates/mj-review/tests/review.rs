@@ -1,5 +1,6 @@
 //! 復盤的整合測試：用 mj-paifu 附的匿名天鳳牌譜。
 
+use mj_review::advisor::{Advisor, AdvisorKind};
 use mj_review::{Options, review_game, summarize};
 use mj_sim::counterfactual::{Metric, Options as CfOptions};
 use mj_strategy::find_strategy;
@@ -33,6 +34,8 @@ fn reviews_one_seat() {
         },
         evaluate: true,
         mjai: None,
+        advisors: Vec::new(),
+        base_advisor: None,
     };
     let r = review_game(&st, &rec, &opts).unwrap();
     assert!(r.decisions.len() > 50, "{}", r.decisions.len());
@@ -67,4 +70,66 @@ fn reviews_one_seat() {
     );
     let typed: usize = s.by_type.iter().map(|t| t.decisions).sum();
     assert_eq!(typed, differences);
+}
+
+/// 顧問：第一個顧問（另一個策略）是比較基準，策略本身是第二個顧問（選擇與理由取自策略）。
+#[test]
+fn advisors_set_the_reference() {
+    let name = |n: &str| format!("tenhou-normal-4p-hanchan/{n}");
+    let st: Arc<dyn mj_strategy::framework::Strategy> =
+        Arc::from(find_strategy(&name("hand-reading")).unwrap());
+    let other: Arc<dyn mj_strategy::framework::Strategy> =
+        Arc::from(find_strategy(&name("push-fold")).unwrap());
+    let rec = record();
+    let base = Options {
+        seats: vec![2],
+        all: false,
+        eval: CfOptions {
+            samples: 0,
+            rollouts: 0,
+            max_rollouts: 0,
+            metric: Metric::Points,
+            determinize: true,
+            kinds: Vec::new(),
+        },
+        evaluate: false,
+        mjai: None,
+        advisors: Vec::new(),
+        base_advisor: None,
+    };
+    let plain = review_game(&st, &rec, &base).unwrap();
+    let opts = Options {
+        advisors: vec![
+            Advisor {
+                name: name("push-fold"),
+                kind: AdvisorKind::Strategy(other),
+            },
+            Advisor {
+                name: name("hand-reading"),
+                kind: AdvisorKind::Strategy(st.clone()),
+            },
+        ],
+        base_advisor: Some(1),
+        ..base
+    };
+    let r = review_game(&st, &rec, &opts).unwrap();
+    assert_eq!(r.advisors.len(), 2);
+    assert!(!r.decisions.is_empty());
+    // 基準換了，但每個決策都還在（兩個策略的決策結構相同時）；策略本身的選擇不變。
+    let mut differ = 0;
+    for d in &r.decisions {
+        assert_eq!(d.picks.len(), 2);
+        assert_eq!(Some(d.strategy), d.picks[0]);
+        let p = plain
+            .decisions
+            .iter()
+            .find(|p| p.act_index == d.act_index && p.kind == d.kind)
+            .expect("same decision");
+        assert_eq!(d.picks[1], Some(p.strategy));
+        assert_eq!(d.notes, p.notes);
+        assert_eq!(d.difference.is_some(), !d.agrees());
+        differ += usize::from(d.picks[0] != d.picks[1]);
+    }
+    // push-fold 與 hand-reading 總有不同的地方。
+    assert!(differ > 0);
 }

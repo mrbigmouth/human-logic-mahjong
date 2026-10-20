@@ -88,6 +88,8 @@ pub fn run(opts: &Options) -> Result<(), String> {
             },
             evaluate: true,
             mjai: opts.mjai.clone(),
+            advisors: Vec::new(),
+            base_advisor: None,
         };
         match review_game(&st, rec, &ro) {
             Ok(r) => {

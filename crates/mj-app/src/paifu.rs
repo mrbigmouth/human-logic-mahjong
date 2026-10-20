@@ -1,11 +1,11 @@
 //! 讀入的牌譜（M12）：解析（天鳳 XML／JSON、mjai）→ 引擎重播 → 任一座位視角的幀 → 復盤。
 //! 剛打完的對局也走同一條路（前端把 session 的牌譜交給 `load_log`），檢視與復盤只有一種做法。
 
+use crate::advisor::{Advisors, advisors};
 use crate::review::{ReviewConfig, ReviewJob, ReviewState};
 use crate::table::{Frame, log_frames};
 use mj_engine::{Event, Seat};
 use mj_paifu::GameRecord;
-use mj_strategy::find_strategy_spec;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -18,9 +18,12 @@ pub struct LogMeta {
     /// 人類的座位
     #[serde(default)]
     pub seat: Option<Seat>,
-    /// 提示用的策略
+    /// 提示用的基礎策略
     #[serde(default)]
     pub strategy: Option<String>,
+    /// 提示與復盤的顧問（M14.5；舊的牌譜沒有，用 `strategy`）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub advisors: Vec<String>,
 }
 
 /// 牌譜的概要（給 UI 選玩家用）。
@@ -119,19 +122,17 @@ impl LoadedLog {
         })
     }
 
-    /// 在背景復盤 `seat`，用策略 `strategy`（名稱，可加 `@參數`）。
+    /// 在背景復盤 `seat`，比較的顧問是 `advisors`（見 [`crate::advisor`]）。
     pub fn start_review(
         &self,
         seat: Seat,
-        strategy: &str,
+        advisors: &Advisors,
         rc: &ReviewConfig,
     ) -> Result<(), String> {
         if seat > 3 {
             return Err("座位必須是 0–3".into());
         }
-        let st: Arc<dyn mj_strategy::framework::Strategy> =
-            Arc::from(find_strategy_spec(strategy)?);
-        self.reviews[usize::from(seat)].start(st, self.record.clone(), seat, rc)
+        self.reviews[usize::from(seat)].start(advisors, self.record.clone(), seat, rc)
     }
 
     /// 反事實實驗用：「即將第 `ask_index` 次詢問 `seat`」時的快照與四家旁觀的策略玩家。
@@ -160,11 +161,20 @@ impl LoadedLog {
         }
     }
 
-    /// 重打用的策略：指定的，或牌譜記載的提示策略，或預設策略。
-    pub fn strategy_name(&self, given: Option<String>) -> String {
-        given
-            .or_else(|| self.meta.as_ref().and_then(|m| m.strategy.clone()))
-            .unwrap_or_else(|| crate::session::DEFAULT_STRATEGY.to_string())
+    /// 顧問：指定的；沒指定時是牌譜記載的顧問，或記載的提示策略，或預設策略。
+    pub fn advisors(&self, given: Option<Vec<String>>) -> Result<Advisors, String> {
+        let names = given
+            .filter(|g| !g.is_empty())
+            .or_else(|| {
+                let m = self.meta.as_ref()?;
+                if m.advisors.is_empty() {
+                    m.strategy.clone().map(|s| vec![s])
+                } else {
+                    Some(m.advisors.clone())
+                }
+            })
+            .unwrap_or_else(|| vec![crate::session::DEFAULT_STRATEGY.to_string()]);
+        advisors(&names)
     }
 
     /// `seat` 的復盤狀態。

@@ -14,6 +14,9 @@
 //!
 //! 策略中所有 `pub const 名稱: Param = Param::new(...)` 會自動列為這個策略的可調參數。
 
+#[path = "src/framework/source.rs"]
+mod source;
+
 use std::fmt::Write;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -97,19 +100,24 @@ fn main() {
             writeln!(out, "        }}").unwrap();
             let mut params = Vec::new();
             find_params(&dir, &mut Vec::new(), &mut params);
-            strategies.push((rule.clone(), name, dir.join("README.md"), params));
+            let updated = source::dir_updated(&dir);
+            strategies.push((rule.clone(), name, dir.clone(), params, updated));
         }
         writeln!(out, "    }}").unwrap();
     }
     out.push_str("}\n\n/// 自動產生：所有策略。\npub fn all_strategies() -> Vec<Box<dyn crate::framework::Strategy>> {\n    vec![\n");
-    for (rule, name, readme, params) in &strategies {
+    for (rule, name, dir, params, updated) in &strategies {
         let m = format!("strategy_list::{}::{}", ident(rule), ident(name));
         let full = format!("{rule}/{name}");
-        let readme = readme.display().to_string();
+        let readme = dir.join("README.md").display().to_string();
         let params: Vec<String> = params.iter().map(|p| format!("{m}::{p}")).collect();
+        let source = format!(
+            "crate::framework::source::Source {{ dir: {:?}, built: {updated:?} }}",
+            dir.display().to_string()
+        );
         writeln!(
             out,
-            "        crate::framework::book_strategy::<{m}::memory::Memory>({full:?}, include_str!({readme:?}), {m}::main::register, vec![{}]),",
+            "        crate::framework::book_strategy::<{m}::memory::Memory>({full:?}, include_str!({readme:?}), {m}::main::register, vec![{}], {source}),",
             params.join(", ")
         )
         .unwrap();

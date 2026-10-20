@@ -117,7 +117,7 @@ pub struct ExperimentRequest {
     /// points = 本局點數；placement = 名次點（打到整場結束）
     #[serde(default = "default_metric")]
     pub metric: String,
-    /// 重打用的策略（讀入的牌譜才用；預設為牌譜記載的提示策略）
+    /// 重打用的策略：顧問中的策略名稱（通常是做這個決策的顧問）；不是策略或沒指定時用基礎策略（見 [`crate::advisor`]）
     #[serde(default)]
     pub strategy: Option<String>,
 }

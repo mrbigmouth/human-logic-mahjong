@@ -484,6 +484,14 @@ pub trait Strategy: Send + Sync {
     fn overrides(&self) -> &ParamSet;
     /// 同一個策略、換一組參數覆寫值（覆寫的名稱必須是這個策略的參數）。
     fn with_params(&self, overrides: ParamSet) -> Result<Box<dyn Strategy>, String>;
+    /// 原始碼位置（策略目錄）與建置時的更新時間
+    fn source(&self) -> Option<super::source::Source> {
+        None
+    }
+    /// 原始碼的最後更新時間（Unix 秒；見 [`super::source`]）
+    fn updated(&self) -> Option<u64> {
+        self.source()?.updated()
+    }
 }
 
 /// 策略玩家：可以上桌，也可以取出決策紀錄。
@@ -548,6 +556,7 @@ pub struct BookStrategy<M> {
     book: Arc<Book<M>>,
     params: Arc<Vec<Param>>,
     overrides: Arc<ParamSet>,
+    source: super::source::Source,
 }
 
 impl<M: Default + Clone + Send + 'static> Strategy for BookStrategy<M> {
@@ -573,6 +582,10 @@ impl<M: Default + Clone + Send + 'static> Strategy for BookStrategy<M> {
         &self.overrides
     }
 
+    fn source(&self) -> Option<super::source::Source> {
+        Some(self.source)
+    }
+
     fn with_params(&self, overrides: ParamSet) -> Result<Box<dyn Strategy>, String> {
         overrides.check(&self.params)?;
         Ok(Box::new(BookStrategy {
@@ -581,6 +594,7 @@ impl<M: Default + Clone + Send + 'static> Strategy for BookStrategy<M> {
             book: self.book.clone(),
             params: self.params.clone(),
             overrides: Arc::new(overrides),
+            source: self.source,
         }))
     }
 }
@@ -592,6 +606,7 @@ pub fn book_strategy<M: Default + Clone + Send + 'static>(
     readme: &'static str,
     register: fn(&mut Book<M>),
     params: Vec<Param>,
+    source: super::source::Source,
 ) -> Box<dyn Strategy> {
     let mut book = Book::default();
     register(&mut book);
@@ -612,6 +627,7 @@ pub fn book_strategy<M: Default + Clone + Send + 'static>(
         book: Arc::new(book),
         params: Arc::new(params),
         overrides: Arc::default(),
+        source,
     })
 }
 

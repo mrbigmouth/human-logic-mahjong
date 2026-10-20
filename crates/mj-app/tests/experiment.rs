@@ -54,7 +54,7 @@ fn experiment_in_a_live_game() {
         let hint = &ask["hint"];
         let id = ask["id"].as_u64().unwrap();
         // 第 3 次以後的何切（有一些歷史）才做實驗；做兩次。
-        if let Some(d) = hint["decisions"]
+        if let Some(d) = hint["advisors"][0]["decisions"]
             .as_array()
             .unwrap()
             .iter()

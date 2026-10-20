@@ -7,6 +7,7 @@ pub mod ctx;
 pub mod explain;
 pub mod param;
 pub mod player;
+pub mod source;
 
 pub use book::Book;
 pub use choice::{CallChoice, DecisionKind, KanChoice, WinKind};

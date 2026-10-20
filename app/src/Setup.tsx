@@ -1,6 +1,8 @@
-// 開局設定：座位、三家對手、提示用的策略、半莊或單局、seed。
+// 開局設定：座位、三家對手、提示與復盤的顧問（1–3 個策略或 AI）、半莊或單局、seed。
+// 策略與 AI 的選項標上最後更新時間，由新至舊排列。
 
 import { useEffect, useState } from "react";
+import { AdvisorPicker, optionLabel } from "./Advisors";
 import { call } from "./api";
 import type { LogInfo, NewGame, Seat, SessionConfig, StrategyInfo } from "./types";
 
@@ -22,12 +24,11 @@ interface Props {
 }
 
 export function Setup({ onStart, onLoaded }: Props) {
-  const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
   const [entrants, setEntrants] = useState<StrategyInfo[]>([]);
   const [opponents, setOpponents] = useState<[string, string, string]>(() =>
     load("opponents", [DEFAULT, DEFAULT, DEFAULT]),
   );
-  const [strategy, setStrategy] = useState(() => load("strategy", DEFAULT));
+  const [advisors, setAdvisors] = useState<string[]>(() => load("advisors", [load("strategy", DEFAULT)]));
   const [seat, setSeat] = useState<number>(() => load("seat", -1));
   const [length, setLength] = useState<"hanchan" | "one">(() => load("length", "hanchan"));
   const [seed, setSeed] = useState("");
@@ -52,7 +53,6 @@ export function Setup({ onStart, onLoaded }: Props) {
   };
 
   useEffect(() => {
-    call<StrategyInfo[]>("strategies").then(setStrategies, (e) => setError(String(e)));
     call<StrategyInfo[]>("entrants").then(setEntrants, (e) => setError(String(e)));
   }, []);
 
@@ -61,7 +61,7 @@ export function Setup({ onStart, onLoaded }: Props) {
     setError(null);
     try {
       localStorage.setItem("opponents", JSON.stringify(opponents));
-      localStorage.setItem("strategy", JSON.stringify(strategy));
+      localStorage.setItem("advisors", JSON.stringify(validAdvisors));
       localStorage.setItem("seat", JSON.stringify(seat));
       localStorage.setItem("length", JSON.stringify(length));
     } catch {
@@ -70,7 +70,7 @@ export function Setup({ onStart, onLoaded }: Props) {
     const cfg: SessionConfig = {
       seat: (seat < 0 ? Math.floor(Math.random() * 4) : seat) as Seat,
       opponents,
-      strategy,
+      advisors: validAdvisors,
       max_hands: length === "one" ? 1 : null,
       seed: seed.trim() === "" ? null : Number(seed),
     };
@@ -83,7 +83,10 @@ export function Setup({ onStart, onLoaded }: Props) {
   };
 
   const choices = entrants;
+  const advisorChoices = entrants.filter((c) => c.kind !== "bot");
   const describe = (name: string) => choices.find((c) => c.name === name);
+  // 不再存在的顧問（例如 Mortal 沒裝）不送出。
+  const validAdvisors = advisors.filter((a) => advisorChoices.some((c) => c.name === a));
 
   return (
     <div className="setup">
@@ -120,25 +123,21 @@ export function Setup({ onStart, onLoaded }: Props) {
             >
               {choices.map((c) => (
                 <option key={c.name} value={c.name}>
-                  {c.title}
-                  {c.name.includes("/") ? `（${c.name.split("/").pop()}）` : ""}
+                  {optionLabel(c)}
                 </option>
               ))}
             </select>
             <span className="desc">{describe(opponents[i])?.summary}</span>
           </label>
         ))}
-        <label>
-          提示與復盤的策略
-          <select value={strategy} onChange={(e) => setStrategy(e.target.value)}>
-            {strategies.map((c) => (
-              <option key={c.name} value={c.name}>
-                {c.title}（{c.name}）
-              </option>
-            ))}
-          </select>
-          <span className="desc">{describe(strategy)?.summary}</span>
-        </label>
+        <div className="label">
+          提示與復盤的策略（最多 3 個，第一個是主要的）
+          <AdvisorPicker choices={advisorChoices} value={validAdvisors} onChange={setAdvisors} />
+          <span className="desc">
+            對局中同時列出每個的選擇；復盤以第一個為比較基準。
+            {validAdvisors.some((a) => describe(a)?.kind === "mjai") && " Mortal 不會說明理由，只列出各動作的機率。"}
+          </span>
+        </div>
         <label>
           seed（空白 = 隨機）
           <input value={seed} onChange={(e) => setSeed(e.target.value.replace(/[^0-9]/g, "").slice(0, 16))} placeholder="隨機" />
@@ -147,7 +146,7 @@ export function Setup({ onStart, onLoaded }: Props) {
       </div>
       {error && <div className="error">{error}</div>}
       <div className="buttons">
-        <button className="primary big" onClick={start} disabled={starting || strategies.length === 0 || seedTooLarge}>
+        <button className="primary big" onClick={start} disabled={starting || validAdvisors.length === 0 || seedTooLarge}>
           開始對局
         </button>
         <label className={`button big ${loading ? "disabled" : ""}`} title="天鳳牌譜（mjlog XML、JSON）或 mjai 牌譜（本 App 儲存的 .mjson）">

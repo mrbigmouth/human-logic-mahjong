@@ -1,10 +1,10 @@
 //! 復盤的背景工作：對局結束後的 session 與讀入的牌譜共用。
 
+use crate::advisor::{AdvisorInfo, Advisors};
 use mj_engine::Seat;
 use mj_paifu::GameRecord;
 use mj_review::{GameReview, Options as ReviewOptions, Summary, review_game, summarize};
 use mj_sim::counterfactual::{Metric, Options as CfOptions};
-use mj_strategy::framework::Strategy;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -20,6 +20,8 @@ pub enum ReviewState {
         seconds: f64,
     },
     Done {
+        /// 顧問（與 `review.decisions[].picks` 對應；第一個是比較基準）
+        advisors: Vec<AdvisorInfo>,
         review: Box<GameReview>,
         summary: Box<Summary>,
         seconds: f64,
@@ -61,7 +63,7 @@ impl ReviewJob {
     /// 在背景復盤 `record` 的 `seat`。已經在跑時不重複開始。
     pub fn start(
         &self,
-        strategy: Arc<dyn Strategy>,
+        advisors: &Advisors,
         record: GameRecord,
         seat: Seat,
         rc: &ReviewConfig,
@@ -100,7 +102,11 @@ impl ReviewJob {
                 .mjai
                 .as_ref()
                 .map(|m| m.split_whitespace().map(String::from).collect()),
+            advisors: advisors.list.clone(),
+            base_advisor: advisors.base_index,
         };
+        let strategy = advisors.base.clone();
+        let infos = advisors.infos();
         let inner = self.inner.clone();
         std::thread::Builder::new()
             .name("mj-review".into())
@@ -109,6 +115,7 @@ impl ReviewJob {
                 let r = review_game(&strategy, &record, &opts);
                 let state = match r {
                     Ok(review) => ReviewState::Done {
+                        advisors: infos,
                         summary: Box::new(summarize(std::slice::from_ref(&review))),
                         review: Box::new(review),
                         seconds: start.elapsed().as_secs_f64(),
