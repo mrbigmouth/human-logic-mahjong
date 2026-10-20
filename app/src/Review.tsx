@@ -85,7 +85,11 @@ export function Review({ info, seat, onView, onQuit }: Props) {
   const [advisors, setAdvisors] = useState<string[]>(() => {
     const m = info.meta;
     if (m?.advisors && m.advisors.length > 0) return m.advisors;
-    return [m?.strategy ?? DEFAULT];
+    if (m?.strategy) return [m.strategy];
+    // 對戰測試的牌譜：玩家名稱就是參賽者（策略或 Mortal），預設和它自己比較（看理由）。
+    const own = info.names[seat];
+    if (own.includes("/") || own.startsWith("mjai:")) return [own];
+    return [DEFAULT];
   });
   const [choices, setChoices] = useState<StrategyInfo[]>([]);
   useEffect(() => {

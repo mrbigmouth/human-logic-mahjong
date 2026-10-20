@@ -283,35 +283,18 @@ enum Command {
         /// 前端檔案目錄（`app/` 中 `npm run build` 的輸出）
         #[arg(long, default_value = "app/dist")]
         dir: PathBuf,
+        /// 資料目錄（對戰測試的結果存在 `<目錄>/tests/`）
+        #[arg(long, default_value = "data/app")]
+        data: PathBuf,
     },
 }
-
-/// 用到 mjai AI、沒有指定 `--jobs` 時，同時進行的對局數：每場對局保留 [`MJAI_MB_PER_JOB`] 的可用記憶體。
-fn mjai_jobs() -> usize {
-    let available_mb = std::fs::read_to_string("/proc/meminfo")
-        .ok()
-        .and_then(|m| {
-            m.lines()
-                .find(|l| l.starts_with("MemAvailable:"))?
-                .split_whitespace()
-                .nth(1)?
-                .parse::<u64>()
-                .ok()
-        })
-        .map_or(4 * MJAI_MB_PER_JOB, |kb| kb / 1024);
-    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
-    ((available_mb / MJAI_MB_PER_JOB) as usize).clamp(1, cores)
-}
-
-/// 每場有 mjai AI 的對局預留的記憶體（MB）：最多 4 個 AI 行程，Mortal 每個約 380 MB。
-const MJAI_MB_PER_JOB: u64 = 1600;
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let jobs = cli.jobs.or_else(|| {
         std::env::args()
             .any(|a| a.contains("mjai:") || a == "--mjai")
-            .then(mjai_jobs)
+            .then(mj_sim::entrant::mjai_jobs)
     });
     if let Some(n) = jobs {
         rayon::ThreadPoolBuilder::new()
@@ -565,7 +548,12 @@ fn main() -> ExitCode {
             seed,
             field,
         } => exit(simulate::run(&entrants, blocks, seed, field.as_deref())),
-        Command::Serve { port, host, dir } => exit(serve::run(&host, port, &dir)),
+        Command::Serve {
+            port,
+            host,
+            dir,
+            data,
+        } => exit(serve::run(&host, port, &dir, &data)),
     }
 }
 

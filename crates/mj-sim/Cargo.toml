@@ -16,5 +16,6 @@ rand.workspace = true
 rand_chacha.workspace = true
 mj-rules.workspace = true
 mj-paifu.workspace = true
+mj-mjai.workspace = true
 rayon.workspace = true
 serde.workspace = true

@@ -1,5 +1,6 @@
-// 畫面切換：設定 → 對局 → 牌譜（檢視器、復盤）。
-// 剛打完的對局與從檔案讀入的牌譜走同一條路：先讀入核心（`load_log`），再檢視或復盤。
+// 畫面切換：設定 → 對局 → 牌譜（檢視器、復盤）；設定 → 對戰測試 → 測試結果 → 某一場的牌譜。
+// 剛打完的對局、從檔案讀入的牌譜、測試中的某一場都走同一條路：先讀入核心，再檢視或復盤。
+// 牌譜畫面記得從哪裡來（`back`），返回時回到測試結果。
 
 import { useState } from "react";
 import { call } from "./api";
@@ -7,15 +8,18 @@ import { Game } from "./Game";
 import { LogScreen } from "./LogScreen";
 import { Review } from "./Review";
 import { Setup } from "./Setup";
+import { TestResultView, Tests } from "./Tests";
 import { Viewer } from "./Viewer";
 import type { LogInfo, NewGame, Seat } from "./types";
 
 type Screen =
   | { kind: "setup" }
   | { kind: "game"; game: NewGame }
-  | { kind: "log"; info: LogInfo }
-  | { kind: "viewer"; info: LogInfo; seat: Seat; open: boolean; frame?: number }
-  | { kind: "review"; info: LogInfo; seat: Seat };
+  | { kind: "log"; info: LogInfo; back?: Screen }
+  | { kind: "viewer"; info: LogInfo; seat: Seat; open: boolean; frame?: number; back?: Screen }
+  | { kind: "review"; info: LogInfo; seat: Seat; back?: Screen }
+  | { kind: "tests" }
+  | { kind: "test"; id: string };
 
 export function App() {
   const [screen, setScreen] = useState<Screen>({ kind: "setup" });
@@ -40,7 +44,24 @@ export function App() {
   const content = (() => {
     switch (screen.kind) {
       case "setup":
-        return <Setup onStart={(game) => setScreen({ kind: "game", game })} onLoaded={(info) => setScreen({ kind: "log", info })} />;
+        return (
+          <Setup
+            onStart={(game) => setScreen({ kind: "game", game })}
+            onLoaded={(info) => setScreen({ kind: "log", info })}
+            onTests={() => setScreen({ kind: "tests" })}
+          />
+        );
+      case "tests":
+        return <Tests onOpen={(id) => setScreen({ kind: "test", id })} onBack={quit} />;
+      case "test":
+        return (
+          <TestResultView
+            key={screen.id}
+            id={screen.id}
+            onOpenGame={(info) => setScreen({ kind: "log", info, back: screen })}
+            onBack={() => setScreen({ kind: "tests" })}
+          />
+        );
       case "game":
         return (
           <Game
@@ -54,9 +75,9 @@ export function App() {
         return (
           <LogScreen
             info={screen.info}
-            onView={(seat, open) => setScreen({ kind: "viewer", info: screen.info, seat, open })}
-            onReview={(seat) => setScreen({ kind: "review", info: screen.info, seat })}
-            onBack={quit}
+            onView={(seat, open) => setScreen({ kind: "viewer", info: screen.info, seat, open, back: screen.back })}
+            onReview={(seat) => setScreen({ kind: "review", info: screen.info, seat, back: screen.back })}
+            onBack={() => setScreen(screen.back ?? { kind: "setup" })}
           />
         );
       case "viewer":
@@ -67,8 +88,8 @@ export function App() {
             open={screen.open}
             frame={screen.frame}
             onChange={(seat, open, frame) => setScreen({ ...screen, seat, open, frame })}
-            onReview={(seat) => setScreen({ kind: "review", info: screen.info, seat })}
-            onBack={() => setScreen({ kind: "log", info: screen.info })}
+            onReview={(seat) => setScreen({ kind: "review", info: screen.info, seat, back: screen.back })}
+            onBack={() => setScreen({ kind: "log", info: screen.info, back: screen.back })}
           />
         );
       case "review":
@@ -77,8 +98,10 @@ export function App() {
             key={screen.seat}
             info={screen.info}
             seat={screen.seat}
-            onView={(frame) => setScreen({ kind: "viewer", info: screen.info, seat: screen.seat, open: false, frame })}
-            onQuit={() => setScreen({ kind: "log", info: screen.info })}
+            onView={(frame) =>
+              setScreen({ kind: "viewer", info: screen.info, seat: screen.seat, open: false, frame, back: screen.back })
+            }
+            onQuit={() => setScreen({ kind: "log", info: screen.info, back: screen.back })}
           />
         );
     }

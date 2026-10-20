@@ -396,3 +396,123 @@ export type ExperimentState =
       seconds: number;
     }
   | { state: "failed"; error: string };
+
+// ── 對戰測試平台（M15） ──
+
+export type TestMode = "selfplay" | "duplicate" | "field" | "predict";
+
+export interface TestRequest {
+  mode: TestMode;
+  entrants: string[];
+  field?: string | null;
+  /** 場數（自我對戰、預測評估）或組數（duplicate、場地對戰） */
+  count: number;
+  seed?: number | null;
+}
+
+export interface TestSummary {
+  id: string;
+  created: number;
+  mode: TestMode;
+  entrants: string[];
+  field: string | null;
+  count: number;
+  seed: number;
+  games_done: number;
+  games_total: number;
+  seconds: number;
+  cancelled: boolean;
+}
+
+export type TestState =
+  | { state: "idle" }
+  | { state: "running"; id: string; done: number; total: number; seconds: number }
+  | { state: "done"; id: string }
+  | { state: "failed"; error: string };
+
+export interface HandStats {
+  hands: number;
+  ron: number;
+  tsumo: number;
+  riichi_wins: number;
+  dama_wins: number;
+  open_wins: number;
+  win_points: number;
+  deal_ins: number;
+  deal_in_points: number;
+  riichi: number;
+}
+
+export interface EntrantResult {
+  name: string;
+  games: number;
+  avg_rank: number;
+  avg_points: number;
+  rank_ci: number;
+  points_ci: number;
+  ranks: [number, number, number, number];
+  hands: HandStats;
+}
+
+export interface Comparison {
+  rank_diff: number;
+  rank_ci: number;
+  points_diff: number;
+  points_ci: number;
+  blocks: number;
+}
+
+export interface Metrics {
+  n: number;
+  mean_p: number;
+  base_rate: number;
+  brier: number;
+  log_loss: number;
+  skill: number;
+  /** [筆數, 平均預測, 實際發生率] × 10 組 */
+  calibration: [number, number, number][];
+}
+
+export interface PredictRow {
+  source: string;
+  category: string;
+  target: string;
+  unriichi: boolean;
+  metrics: Metrics;
+  when_true: number;
+  when_false: number;
+}
+
+export interface TestResult {
+  summary: TestSummary;
+  request: TestRequest;
+  /** 統計項目（對局清單的 item 編號） */
+  names: string[];
+  report: { entrants: EntrantResult[]; comparison: Comparison | null } | null;
+  predict: PredictRow[];
+  games: number;
+}
+
+export interface SeatRow {
+  item: number;
+  name: string;
+  score: number;
+  rank: number;
+  points: number;
+  wins: number;
+  deal_ins: number;
+}
+
+export interface GameRow {
+  index: number;
+  block: number;
+  seed: number;
+  hands: number;
+  seats: SeatRow[];
+  stored: boolean;
+}
+
+export interface GamePage {
+  total: number;
+  rows: GameRow[];
+}

@@ -214,6 +214,7 @@ dependencies = [
  "mj-sim",
  "mj-strategy",
  "mj-tools",
+ "rayon",
  "serde",
  "serde_json",
 ]
@@ -329,6 +330,7 @@ dependencies = [
  "mj-calc",
  "mj-core",
  "mj-engine",
+ "mj-mjai",
  "mj-paifu",
  "mj-rules",
  "mj-strategy",

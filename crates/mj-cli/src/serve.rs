@@ -83,9 +83,9 @@ fn static_file(dir: &Path, url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     }
 }
 
-pub fn run(host: &str, port: u16, dir: &Path) -> Result<(), String> {
+pub fn run(host: &str, port: u16, dir: &Path, data: &Path) -> Result<(), String> {
     let server = Server::http((host, port)).map_err(|e| format!("無法監聽 {host}:{port}：{e}"))?;
-    let app = Arc::new(App::new());
+    let app = Arc::new(App::with_data_dir(Some(data.to_path_buf())));
     let dir: PathBuf = dir.to_path_buf();
     println!(
         "練習 App：http://localhost:{port}（API：POST /api/<名稱>；前端檔案：{}）",

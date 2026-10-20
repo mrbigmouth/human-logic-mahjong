@@ -5,94 +5,24 @@
 
 use mj_engine::{Event, GameConfig, HandEnd, Player, run_game};
 use mj_rules::riichi::RiichiConfig;
-use mj_sim::bots::{GreedyBot, RandomBot};
-use mj_strategy::find_strategy_spec;
-use mj_strategy::framework::Strategy;
+use mj_sim::entrant::EntrantSpec;
 use mj_strategy::framework::explain::{display_width, pad, pad_left};
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Instant;
 
-/// 一個座位要放什麼玩家。
-#[derive(Clone)]
-enum SeatSpec {
-    /// 貪婪機器人（純牌效，隨機鳴牌）
-    Greedy,
-    /// 隨機機器人
-    Random,
-    /// strategy-list 中的策略
-    Strategy(Arc<dyn Strategy>),
-    /// 說 mjai 協定的外部程式（程式與參數）
-    Mjai(Vec<String>),
-}
-
-/// 一個座位設定與它在統計中的名稱。
-#[derive(Clone)]
-pub(crate) struct Seat {
-    pub(crate) label: String,
-    spec: SeatSpec,
-}
-
-/// 解析一個參賽者：`greedy`、`random`、`mjai:<外部程式 參數…>`（說 mjai 協定的 AI；行程在對局之間重複使用）
-/// 或策略名稱「規則／策略」（可加 `@參數覆寫`，見 `find_strategy_spec`；
-/// 座位清單以逗號分隔，所以這裡的多個參數改用分號分隔）。
-pub(crate) fn parse_entrant(s: &str) -> Result<Seat, String> {
-    match s.trim() {
-        "greedy" => Ok(Seat {
-            label: "greedy".into(),
-            spec: SeatSpec::Greedy,
-        }),
-        "random" => Ok(Seat {
-            label: "random".into(),
-            spec: SeatSpec::Random,
-        }),
-        mjai if mjai.starts_with("mjai:") => {
-            let cmd: Vec<String> = mjai["mjai:".len()..]
-                .split_whitespace()
-                .map(String::from)
-                .collect();
-            if cmd.is_empty() {
-                return Err("mjai: 後面要接外部程式，例如 mjai:./mortal.sh".into());
-            }
-            Ok(Seat {
-                label: mjai.to_string(),
-                spec: SeatSpec::Mjai(cmd),
-            })
-        }
-        name => find_strategy_spec(name).map(|st| Seat {
-            label: name.to_string(),
-            spec: SeatSpec::Strategy(Arc::from(st)),
-        }),
-    }
-}
-
-/// 解析座位設定：以逗號分隔的四項，每項見 [`parse_entrant`]。
-fn parse_seats(spec: &str) -> Result<Vec<Seat>, String> {
-    let seats: Vec<Seat> = spec
+/// 解析座位設定：以逗號分隔的四項，每項是一個參賽者（見 `mj_sim::entrant`；
+/// 座位清單以逗號分隔，所以策略的多個參數覆寫改用分號分隔）。
+fn parse_seats(spec: &str) -> Result<Vec<EntrantSpec>, String> {
+    let seats: Vec<EntrantSpec> = spec
         .split(',')
-        .map(parse_entrant)
+        .map(EntrantSpec::parse)
         .collect::<Result<_, String>>()?;
     if seats.len() != 4 {
         return Err(format!("--seats 需要 4 項，目前是 {} 項", seats.len()));
     }
     Ok(seats)
-}
-
-/// 建立玩家（機器人的 seed 由對局 seed 推導，結果可重現）。
-pub(crate) fn make_player(seat: &Seat, seed: u64, i: u64) -> Box<dyn Player> {
-    let s = seed.wrapping_mul(31).wrapping_add(i);
-    match &seat.spec {
-        SeatSpec::Greedy => Box::new(GreedyBot::new(s, 0.3)),
-        SeatSpec::Random => Box::new(RandomBot::new(s)),
-        SeatSpec::Strategy(st) => st.player(false, None),
-        SeatSpec::Mjai(cmd) => {
-            let bot = mj_mjai::PooledBot::checkout(cmd).unwrap_or_else(|e| panic!("{e}"));
-            let names = std::array::from_fn(|_| seat.label.clone());
-            Box::new(mj_mjai::MjaiPlayer::new(bot, names))
-        }
-    }
 }
 
 /// 每一方（同名的座位合併計算）的統計。
@@ -313,9 +243,9 @@ pub fn run(
         .map(|g| {
             let cfg = GameConfig::new(rules.clone(), seed.wrapping_add(g));
             let shift = if rotate { g as usize % 4 } else { 0 };
-            let at: [&Seat; 4] = std::array::from_fn(|s| &seats[(s + shift) % 4]);
+            let at: [&EntrantSpec; 4] = std::array::from_fn(|s| &seats[(s + shift) % 4]);
             let mut ps: [Box<dyn Player>; 4] =
-                std::array::from_fn(|s| make_player(at[s], cfg.seed, s as u64));
+                std::array::from_fn(|s| at[s].player(cfg.seed, s as u64));
             let result = run_game(&cfg, &mut ps, true)
                 .map_err(|e| format!("第 {g} 場（seed {}）：{e}", cfg.seed))?;
             if g == 0 {

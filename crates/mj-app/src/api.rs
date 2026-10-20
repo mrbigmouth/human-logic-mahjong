@@ -19,10 +19,19 @@
 //! | `start_experiment` | [`ExperimentRequest`] | `null`：反事實實驗（對局中或讀入的牌譜；開始新的會取消舊的） |
 //! | `experiment` | — | [`ExperimentState`](crate::ExperimentState)（進度或結果） |
 //! | `cancel_experiment` | — | `null`：停止實驗，以已完成的世界計算結果 |
+//! | `start_test` | [`testbed::TestRequest`](crate::testbed::TestRequest) | `{ id }`：開始對戰測試（M15；同時只有一個） |
+//! | `test_status` | — | [`testbed::TestState`](crate::testbed::TestState)（進度） |
+//! | `cancel_test` | — | `null`：停止測試，以已完成的對局計算結果 |
+//! | `tests` | — | 已完成的測試（[`testbed::TestSummary`](crate::testbed::TestSummary)，新的在前） |
+//! | `test_result` | `{ id }` | 測試結果：`summary`、`request`、`names`（統計項目）、`report`、`predict`、`games` |
+//! | `test_games` | [`testbed::GamesQuery`](crate::testbed::GamesQuery) | [`testbed::GamePage`](crate::testbed::GamePage)：對局清單的一頁（可排序） |
+//! | `open_test_game` | `{ id, index }` | [`LogInfo`](crate::LogInfo)：把這一場讀入（重打或讀保存的牌譜），之後與 `load_log` 相同 |
+//! | `delete_test` | `{ id }` | `null` |
 
 use crate::experiment::{ExperimentJob, ExperimentRequest};
 use crate::paifu::LoadedLog;
 use crate::session::{ReviewConfig, Session, SessionConfig};
+use crate::testbed::{GamesQuery, TestRequest, Testbed};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
@@ -31,12 +40,29 @@ use std::time::Duration;
 /// 長輪詢最多等多久。
 const MAX_WAIT: Duration = Duration::from_secs(30);
 
-/// App 的狀態：目前的對局（同時只有一場；開新局會丟棄舊的）與讀入的牌譜（同時只有一份）。
-#[derive(Default)]
+/// App 的狀態：目前的對局（同時只有一場；開新局會丟棄舊的）、讀入的牌譜（同時只有一份）、實驗與對戰測試。
 pub struct App {
     session: Mutex<Option<Arc<Session>>>,
     loaded: Mutex<Option<Arc<LoadedLog>>>,
     experiment: ExperimentJob,
+    testbed: Testbed,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        App::with_data_dir(None)
+    }
+}
+
+#[derive(Deserialize)]
+struct IdArgs {
+    id: String,
+}
+
+#[derive(Deserialize)]
+struct TestGameArgs {
+    id: String,
+    index: usize,
 }
 
 #[derive(Deserialize)]
@@ -156,8 +182,27 @@ fn entrants() -> Vec<Value> {
 }
 
 impl App {
+    /// 不保存資料（對戰測試的結果只放在記憶體中）。
     pub fn new() -> Self {
         App::default()
+    }
+
+    /// `dir` = 資料目錄：對戰測試的結果存在 `<dir>/tests/`。
+    pub fn with_data_dir(dir: Option<std::path::PathBuf>) -> Self {
+        App {
+            session: Mutex::default(),
+            loaded: Mutex::default(),
+            experiment: ExperimentJob::default(),
+            testbed: Testbed::new(dir.map(|d| d.join("tests"))),
+        }
+    }
+
+    /// 讀入一份牌譜（取代之前的），清掉舊的實驗結果。
+    fn set_loaded(&self, log: LoadedLog) -> Result<Value, String> {
+        self.experiment.reset();
+        let info = log.info();
+        *self.loaded.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(log));
+        to_json(&info)
     }
 
     fn current(&self) -> Result<Arc<Session>, String> {
@@ -215,11 +260,7 @@ impl App {
                 let a: LoadArgs = args(params)?;
                 let id = a.name.rsplit(['/', '\\']).next().unwrap_or_default();
                 let id = id.rsplit_once('.').map_or(id, |(stem, _)| stem);
-                let log = LoadedLog::parse(&a.text, id)?;
-                self.experiment.reset();
-                let info = log.info();
-                *self.loaded.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(log));
-                to_json(&info)
+                self.set_loaded(LoadedLog::parse(&a.text, id)?)
             }
             "log_info" => to_json(&self.loaded()?.info()),
             "log_frames" => {
@@ -261,6 +302,42 @@ impl App {
             "experiment" => to_json(&self.experiment.state()),
             "cancel_experiment" => {
                 self.experiment.cancel();
+                Ok(Value::Null)
+            }
+            "start_test" => {
+                let req: TestRequest = args(params)?;
+                Ok(json!({ "id": self.testbed.start(req)? }))
+            }
+            "test_status" => to_json(&self.testbed.state()),
+            "cancel_test" => {
+                self.testbed.cancel();
+                Ok(Value::Null)
+            }
+            "tests" => to_json(&self.testbed.list()),
+            "test_result" => {
+                let a: IdArgs = args(params)?;
+                let f = self.testbed.get(&a.id)?;
+                Ok(json!({
+                    "summary": f.summary,
+                    "request": f.request,
+                    "names": f.plan.as_ref().map(|p| p.names.clone()).unwrap_or_default(),
+                    "report": f.report,
+                    "predict": f.predict,
+                    "games": f.outcomes.len(),
+                }))
+            }
+            "test_games" => {
+                let q: GamesQuery = args(params)?;
+                to_json(&self.testbed.games(&q)?)
+            }
+            "open_test_game" => {
+                let a: TestGameArgs = args(params)?;
+                let text = self.testbed.game_log(&a.id, a.index)?;
+                self.set_loaded(LoadedLog::parse(&text, &format!("{}-{}", a.id, a.index))?)
+            }
+            "delete_test" => {
+                let a: IdArgs = args(params)?;
+                self.testbed.delete(&a.id)?;
                 Ok(Value::Null)
             }
             _ => Err(format!("沒有這個 API：{name}")),

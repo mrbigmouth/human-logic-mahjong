@@ -9,6 +9,7 @@
 use mj_app::App;
 use serde_json::Value;
 use std::sync::Arc;
+use tauri::Manager;
 
 #[tauri::command]
 async fn api(
@@ -31,7 +32,12 @@ fn save_text(path: String, text: String) -> Result<(), String> {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(Arc::new(App::new()))
+        .setup(|app| {
+            // 對戰測試的結果存在 App 的資料目錄（各平台的標準位置）。
+            let dir = app.path().app_data_dir().ok();
+            app.manage(Arc::new(App::with_data_dir(dir)));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![api, save_text])
         .run(tauri::generate_context!())
         .expect("無法啟動 App");

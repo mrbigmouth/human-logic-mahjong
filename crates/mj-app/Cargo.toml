@@ -12,6 +12,7 @@ mj-engine.workspace = true
 mj-rules.workspace = true
 mj-strategy.workspace = true
 mj-sim.workspace = true
+rayon.workspace = true
 mj-paifu.workspace = true
 mj-review.workspace = true
 mj-mjai.workspace = true

@@ -1120,3 +1120,66 @@ button.small {
   padding-left: 18px;
   line-height: 1.6;
 }
+/* ---------- 對戰測試（M15） ---------- */
+.setup.tests {
+  max-width: 900px;
+}
+.test-result {
+  max-width: 1280px;
+  margin: 24px auto;
+  padding: 0 20px;
+}
+tr.clickable {
+  cursor: pointer;
+}
+tr.clickable:hover td {
+  background: var(--panel-2);
+}
+tr.opening td {
+  opacity: 0.5;
+}
+.tests-list td.names {
+  text-align: left;
+  max-width: 380px;
+}
+.summary.games td {
+  white-space: nowrap;
+}
+.games .seat-name {
+  font-weight: bold;
+}
+.games .item-0 .seat-name {
+  color: var(--accent);
+}
+.games .item-1 .seat-name {
+  color: #ffb74d;
+}
+.games .item-2 .seat-name {
+  color: #aed581;
+}
+.games .item-3 .seat-name {
+  color: #ce93d8;
+}
+.panel.comparison {
+  margin: 10px 0;
+  line-height: 1.8;
+}
+.test-result .summary {
+  width: 100%;
+}
+@media (max-width: 760px) {
+  .test-result {
+    padding: 0 12px;
+    overflow-x: auto;
+  }
+}
+/* 按下停止後、工作真的結束前 */
+button.stopping {
+  background: #5d4037;
+  border-color: #8d6e63;
+  color: #ffccbc;
+  cursor: wait;
+}
+progress.stopping {
+  opacity: 0.5;
+}

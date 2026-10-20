@@ -9,11 +9,9 @@ pub use crate::review::{ReviewConfig, ReviewState};
 use crate::table::{Frame, TableBuilder, seat_name, table_mismatch};
 use mj_core::Pai;
 use mj_engine::{Action, Event, GameConfig, Player, PlayerView, Seat, run_game};
-use mj_mjai::{MjaiPlayer, PooledBot};
 use mj_review::advisor::{Answer, Policy, Watcher, pick};
 use mj_rules::riichi::RiichiConfig;
-use mj_sim::bots::{GreedyBot, RandomBot};
-use mj_strategy::find_strategy_spec;
+use mj_sim::entrant::EntrantSpec;
 use mj_strategy::framework::{DecisionRecord, Strategy, StrategyPlayer};
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -548,25 +546,6 @@ impl Player for HumanSeat {
     }
 }
 
-/// 建立一個 AI 座位。
-fn make_ai(spec: &str, seed: u64, names: &[String; 4]) -> Result<Box<dyn Player + Send>, String> {
-    Ok(match spec.trim() {
-        "greedy" => Box::new(GreedyBot::new(seed, 0.3)),
-        "random" => Box::new(RandomBot::new(seed)),
-        mjai if mjai.starts_with("mjai:") => {
-            let cmd: Vec<String> = mjai["mjai:".len()..]
-                .split_whitespace()
-                .map(String::from)
-                .collect();
-            if cmd.is_empty() {
-                return Err("mjai: 後面要接外部程式".into());
-            }
-            Box::new(MjaiPlayer::new(PooledBot::checkout(&cmd)?, names.clone()))
-        }
-        name => find_strategy_spec(name)?.player(false, None),
-    })
-}
-
 /// 一場進行中的對局。丟棄時，若還在等人類的動作，對局會自動打完並結束。
 pub struct Session {
     pub config: SessionConfig,
@@ -635,11 +614,8 @@ impl Session {
                     auto_pending: false,
                 })
             } else {
-                make_ai(
-                    &names[usize::from(s)],
-                    seed.wrapping_mul(31).wrapping_add(u64::from(s)),
-                    &names,
-                )?
+                // 參賽者登錄與對戰測試、CLI 共用（機器人的 seed 由對局 seed 與座位推導）。
+                EntrantSpec::parse(&names[usize::from(s)])?.try_player(seed, u64::from(s))?
             };
             // 記下每個動作：反事實實驗照紀錄重播到任一時刻。
             players.push(Box::new(Recorder {

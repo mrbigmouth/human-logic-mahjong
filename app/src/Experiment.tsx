@@ -20,6 +20,11 @@ export function Experiment({ target, defaultWorlds = 64, onClose }: Props) {
   const [metric, setMetric] = useState<"points" | "placement">("points");
   const [chosen, setChosen] = useState<Set<number>>(() => new Set(target.options.map((_, i) => i)));
   const [state, setState] = useState<ExperimentState>({ state: "idle" });
+  // 按下停止後到實驗真的結束之間（進行中的世界要打完）：按鈕停用，避免重複點擊。
+  const [stopping, setStopping] = useState(false);
+  useEffect(() => {
+    if (state.state !== "running") setStopping(false);
+  }, [state.state]);
 
   // 換了決策就重設選項；如果核心裡已有這個決策的結果，直接顯示。
   useEffect(() => {
@@ -135,11 +140,20 @@ export function Experiment({ target, defaultWorlds = 64, onClose }: Props) {
         </label>
         {state.state === "running" ? (
           <>
-            <progress value={state.done} max={state.total} />
+            <progress className={stopping ? "stopping" : ""} value={state.done} max={state.total} />
             <span className="muted">
-              {state.done}／{state.total}　{Math.round(state.seconds)} 秒
+              {state.done}／{state.total}　{Math.round(state.seconds)} 秒{stopping && "　停止中…"}
             </span>
-            <button onClick={() => void call("cancel_experiment")}>停止</button>
+            <button
+              className={stopping ? "stopping" : ""}
+              disabled={stopping}
+              onClick={() => {
+                setStopping(true);
+                void call("cancel_experiment").catch(() => setStopping(false));
+              }}
+            >
+              {stopping ? "停止中…" : "停止"}
+            </button>
           </>
         ) : (
           <button className="primary" onClick={start}>

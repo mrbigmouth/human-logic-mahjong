@@ -1,9 +1,9 @@
 //! `mj simulate`：duplicate（複式）對戰。同一組牌山輪換座位打 4 場，比較各方的平均順位與名次點；
 //! 兩方對戰時另外輸出成對差距與 95% 信賴區間。`--field X`：兩方各自和三家 X 同桌（場地對戰）。
 
-use crate::selfplay::{make_player, parse_entrant};
 use mj_engine::Player;
 use mj_sim::duplicate;
+use mj_sim::entrant::EntrantSpec;
 use mj_strategy::framework::explain::{display_width, pad, pad_left};
 use std::time::Instant;
 
@@ -21,7 +21,7 @@ pub fn run(entrants: &[String], blocks: u64, seed: u64, field: Option<&str>) -> 
         .collect();
     let seats = all
         .iter()
-        .map(|e| parse_entrant(e))
+        .map(|e| EntrantSpec::parse(e))
         .collect::<Result<Vec<_>, _>>()?;
     // 同名的參賽者（例如 A/A 測試）加上編號以便區分。
     let names: Vec<String> = seats
@@ -36,7 +36,7 @@ pub fn run(entrants: &[String], blocks: u64, seed: u64, field: Option<&str>) -> 
         })
         .collect();
     let make = |who: usize, seed: u64, seat: u8| -> Box<dyn Player> {
-        make_player(&seats[who], seed, u64::from(seat))
+        seats[who].player(seed, u64::from(seat))
     };
     let start = Instant::now();
     let report = match field {

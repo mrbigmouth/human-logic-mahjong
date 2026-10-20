@@ -21,9 +21,11 @@ interface Props {
   onStart: (g: NewGame) => void;
   /** 讀入牌譜檔之後 */
   onLoaded: (info: LogInfo) => void;
+  /** 對戰測試頁 */
+  onTests: () => void;
 }
 
-export function Setup({ onStart, onLoaded }: Props) {
+export function Setup({ onStart, onLoaded, onTests }: Props) {
   const [entrants, setEntrants] = useState<StrategyInfo[]>([]);
   const [opponents, setOpponents] = useState<[string, string, string]>(() =>
     load("opponents", [DEFAULT, DEFAULT, DEFAULT]),
@@ -163,6 +165,9 @@ export function Setup({ onStart, onLoaded }: Props) {
             }}
           />
         </label>
+        <button className="big" onClick={onTests} title="策略、機器人、Mortal 大量對戰：勝率、每場的細節、實驗">
+          對戰測試…
+        </button>
       </div>
     </div>
   );

@@ -15,6 +15,7 @@ use mj_strategy::framework::{Claim, ClaimRecord, Strategy, StrategyPlayer, Targe
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// 一筆已判定真相的預測。
 #[derive(Debug, Clone)]
@@ -119,7 +120,7 @@ pub fn judge(log: &[Event], c: &ClaimRecord) -> Option<bool> {
 }
 
 /// 一組預測的統計。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Metrics {
     pub n: usize,
     pub mean_p: f64,
@@ -232,9 +233,23 @@ pub fn collect_mixed(
     games: u64,
     seed: u64,
 ) -> Result<Vec<(Option<usize>, Judged)>, String> {
+    collect_mixed_with(strategies, games, seed, None, None)
+}
+
+/// 同 [`collect_mixed`]，可查進度（完成的場數）、可取消（還沒開始的對局不再打，回傳已完成的部分）。
+pub fn collect_mixed_with(
+    strategies: &[Arc<dyn Strategy>; 4],
+    games: u64,
+    seed: u64,
+    progress: Option<&AtomicUsize>,
+    cancel: Option<&AtomicBool>,
+) -> Result<Vec<(Option<usize>, Judged)>, String> {
     let per_game: Vec<Vec<(Option<usize>, Judged)>> = (0..games)
         .into_par_iter()
         .map(|g| {
+            if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+                return Ok(Vec::new());
+            }
             let who = |s: usize| (s + g as usize) % 4;
             let mut sps: Vec<_> = (0..4)
                 .map(|s| strategies[who(s)].player(true, None))
@@ -245,6 +260,9 @@ pub fn collect_mixed(
             };
             let cfg = GameConfig::new(RiichiConfig::TENHOU, seed.wrapping_add(g));
             let result = run_game_with(&cfg, refs, true).map_err(|e| e.to_string())?;
+            if let Some(p) = progress {
+                p.fetch_add(1, Ordering::Relaxed);
+            }
             Ok(judge_all(&mut sps, &result.log)
                 .into_iter()
                 .map(|j| (j.target_seat.map(|s| who(usize::from(s))), j))
