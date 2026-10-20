@@ -133,7 +133,7 @@ fn default_metric() -> String {
 }
 
 /// 世界數上限（避免一次跑太久）。
-pub const MAX_WORLDS: usize = 1000;
+pub const MAX_WORLDS: usize = 4096;
 
 /// 實驗的狀態（API `experiment`）。
 #[derive(Debug, Clone, Serialize)]

@@ -463,8 +463,11 @@ select option {
 .actions .act.riichi.on {
   background: #ef6c00;
 }
+/* 提示的動作（吃、碰、槓、和牌、跳過……）：外框＋光暈＋提示點，與一般的焦點框分得開 */
 .actions .act.hinted {
   outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 12px var(--accent);
 }
 .hint-dot {
   position: absolute;
@@ -1108,4 +1111,12 @@ button.small {
 }
 .badge.other {
   background: #4a3f6b;
+}
+.block-dialog {
+  max-width: 520px;
+}
+.block-dialog ul {
+  margin: 4px 0 10px;
+  padding-left: 18px;
+  line-height: 1.6;
 }

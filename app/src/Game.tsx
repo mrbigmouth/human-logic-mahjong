@@ -57,7 +57,14 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
   const [hold, setHold] = useState<number | null>(null); // 停在第幾幀（一局結果）
   const [released, setReleased] = useState<Set<number>>(new Set());
   const [riichiMode, setRiichiMode] = useState(false);
-  const [showHint, setShowHint] = useState(() => localStorage.getItem("hint") !== "off");
+  const [hintMode, setHintMode] = useState<HintMode>(() => {
+    const v = localStorage.getItem("hintMode");
+    if (v === "off" || v === "block" || v === "live") return v;
+    return localStorage.getItem("hint") === "off" ? "off" : "live";
+  });
+  // 失誤阻擋：已經為哪次詢問跳出過提示（之後同一次詢問不再阻擋，並顯示提示）
+  const [blockedAsk, setBlockedAsk] = useState<number | null>(null);
+  const [blocking, setBlocking] = useState<ActionView | null>(null);
   const [speed, setSpeed] = useState(() => Number(localStorage.getItem("speed") ?? 500));
   const [volume, setVolume] = useState(() => Number(localStorage.getItem("volume") ?? 0.6));
   const [panelOpen, setPanelOpen] = useState(() => localStorage.getItem("panel") !== "closed");
@@ -71,7 +78,7 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
 
   useEffect(() => {
     try {
-      localStorage.setItem("hint", showHint ? "on" : "off");
+      localStorage.setItem("hintMode", hintMode);
       localStorage.setItem("speed", String(speed));
       localStorage.setItem("volume", String(volume));
       localStorage.setItem("panel", panelOpen ? "open" : "closed");
@@ -79,7 +86,7 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
     } catch {
       // 無法儲存設定時忽略
     }
-  }, [showHint, speed, volume, panelOpen, tab]);
+  }, [hintMode, speed, volume, panelOpen, tab]);
 
   // 長輪詢：有詢問或對局結束時暫停，回答後再繼續。
   const poll = useMemo(
@@ -140,9 +147,17 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
   // 詢問要等播放追上（看到的幀數 ≥ 詢問時的幀數）才顯示。
   const activeAsk = ask && frames.length > 0 && pos + 1 >= ask.frame && hold === null ? ask : null;
 
-  const act = async (a: ActionView) => {
+  const act = async (a: ActionView, force = false) => {
     if (!ask) return;
     const current = ask;
+    // 失誤阻擋：與主要提示策略的選擇不同時先擋下並說明；同一次詢問只擋一次。
+    const main = current.hint?.action ?? null;
+    if (!force && hintMode === "block" && main !== null && a.index !== main && blockedAsk !== current.id) {
+      setBlockedAsk(current.id);
+      setBlocking(a);
+      return;
+    }
+    setBlocking(null);
     setAsk(null);
     setRiichiMode(false);
     try {
@@ -162,7 +177,8 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
 
   const table = frame.table;
   const events = frames.slice(Math.max(0, pos - 40), pos + 1).reverse();
-  const hint = activeAsk && showHint ? activeAsk.hint : null;
+  const hint =
+    activeAsk && (hintMode === "live" || (hintMode === "block" && blockedAsk === activeAsk.id)) ? activeAsk.hint : null;
 
   const tabs: [Tab, string, boolean][] = [
     ["hint", "提示", hint !== null],
@@ -184,7 +200,7 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
             riichiMode={riichiMode}
             setRiichiMode={setRiichiMode}
             hint={hint ? hint.action : null}
-            onAct={act}
+            onAct={(a) => void act(a)}
           />
         </div>
       </div>
@@ -209,8 +225,13 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
             ))}
           </div>
           <div className="controls">
-            <label>
-              <input type="checkbox" checked={showHint} onChange={(e) => setShowHint(e.target.checked)} /> 即時提示
+            <label title="失誤阻擋：選擇與主要提示策略不同時先擋下並顯示提示（每次詢問只擋一次）">
+              提示
+              <select value={hintMode} onChange={(e) => setHintMode(e.target.value as HintMode)}>
+                <option value="off">不提示</option>
+                <option value="block">失誤阻擋</option>
+                <option value="live">即時提示</option>
+              </select>
             </label>
             <label title="AI 打牌的間隔">
               速度
@@ -264,7 +285,11 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
                 />
               ) : (
                 <div className="muted">
-                  {activeAsk ? "輪到你了（即時提示已關閉）" : "輪到你時，這裡會顯示策略（與 AI）的選擇與理由。"}
+                  {activeAsk
+                    ? hintMode === "block"
+                      ? "輪到你了（失誤阻擋：選擇與策略不同時才會顯示提示）"
+                      : "輪到你了（提示已關閉）"
+                    : "輪到你時，這裡會顯示策略（與 AI）的選擇與理由。"}
                 </div>
               ))}
             {tab === "efficiency" &&
@@ -281,7 +306,7 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
               ))}
             {tab === "experiment" &&
               (expTarget ? (
-                <Experiment target={expTarget} />
+                <Experiment target={expTarget} defaultWorlds={1024} />
               ) : (
                 <div className="muted">
                   在「提示」分頁的決策旁按「實驗」：比較這個選擇的各選項，之後四家都依策略打完的平均結果、和了率與放銃率。
@@ -301,6 +326,18 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
           </div>
         )}
       </section>
+      {blocking && activeAsk && activeAsk.hint && (
+        <BlockDialog
+          hint={activeAsk.hint}
+          mine={blocking}
+          onKeep={() => void act(blocking, true)}
+          onBack={() => {
+            setBlocking(null);
+            setTab("hint");
+            setPanelOpen(true);
+          }}
+        />
+      )}
       {error && (
         <div className="modal">
           <div className="dialog">
@@ -334,6 +371,53 @@ export function Game({ game, onOpenLog, onQuit }: Props) {
 }
 
 type Tab = "hint" | "efficiency" | "routes" | "experiment" | "log" | "info";
+/** 不提示／失誤阻擋／即時提示 */
+type HintMode = "off" | "block" | "live";
+
+/** 失誤阻擋的對話框：你的選擇與主要提示策略不同。 */
+function BlockDialog({
+  hint,
+  mine,
+  onKeep,
+  onBack,
+}: {
+  hint: Hint;
+  mine: ActionView;
+  onKeep: () => void;
+  onBack: () => void;
+}) {
+  const main = hint.advisors[0];
+  const notes = main?.decisions.flatMap((d) => d.notes) ?? [];
+  return (
+    <div className="modal">
+      <div className="dialog block-dialog">
+        <h2>等一下</h2>
+        <p>
+          你的選擇：<TileText text={mine.label} />
+          <br />
+          {main?.title ?? "策略"}的選擇：<TileText text={hint.label} />
+        </p>
+        {notes.length > 0 && (
+          <ul>
+            {notes.map((n, i) => (
+              <li key={i}>
+                <TileText text={n} />
+              </li>
+            ))}
+          </ul>
+        )}
+        {main?.ai && <PolicyList policy={main.policy} />}
+        <div className="buttons">
+          <button className="primary" onClick={onBack}>
+            重新選擇
+          </button>
+          <button onClick={onKeep}>照我的選擇</button>
+        </div>
+        <p className="muted">這次詢問不會再阻擋；提示已顯示在下方面板。</p>
+      </div>
+    </div>
+  );
+}
 
 /** 播放到這一幀時的音效。 */
 function soundFor(ev: EventView): SoundKind | null {
@@ -433,6 +517,7 @@ export function Hand({ table, ask, riichiMode, setRiichiMode, hint, onAct }: Han
             onClick={() => onAct(a)}
           >
             <TileText text={a.label} />
+            {hint === a.index && <span className="hint-dot" />}
           </button>
         ))}
         {riichiMode && <span className="note">選擇立直要打的牌</span>}

@@ -8,13 +8,15 @@ import { KIND_NAMES, type ExperimentState, type ExperimentTarget } from "./types
 
 interface Props {
   target: ExperimentTarget;
+  /** 世界數的預設值（對局中 1024；復盤時逐一查看，預設較少） */
+  defaultWorlds?: number;
   onClose?: () => void;
 }
 
 const pct = (x: number) => `${Math.round(x * 1000) / 10}%`;
 
-export function Experiment({ target, onClose }: Props) {
-  const [worlds, setWorlds] = useState(64);
+export function Experiment({ target, defaultWorlds = 64, onClose }: Props) {
+  const [worlds, setWorlds] = useState(defaultWorlds);
   const [metric, setMetric] = useState<"points" | "placement">("points");
   const [chosen, setChosen] = useState<Set<number>>(() => new Set(target.options.map((_, i) => i)));
   const [state, setState] = useState<ExperimentState>({ state: "idle" });
@@ -119,7 +121,9 @@ export function Experiment({ target, onClose }: Props) {
             <option value={32}>32（快）</option>
             <option value={64}>64</option>
             <option value={128}>128</option>
-            <option value={256}>256（較準）</option>
+            <option value={256}>256</option>
+            <option value={512}>512</option>
+            <option value={1024}>1024（較準、較慢）</option>
           </select>
         </label>
         <label>
